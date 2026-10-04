@@ -51,7 +51,7 @@ return function(ctx)
         FreeMob = nil,         -- farm sem quest (nome do mob)
         BossMob = nil,         -- farm de boss (nome do boss)
         FlyFarm = true, FlySpeed = 60, FastAttack = true, BringMobs = false,
-        WeaponType = "Melee", Height = 6, WaterWalk = false,
+        WeaponType = "Melee", Height = 4, WaterWalk = false,
         QuestCooldown = 0, LastNotify = 0,
     }
     local FlyFarmMoving = false
@@ -129,6 +129,33 @@ return function(ctx)
             end
         end
         if not found and c then pcall(function() c:SetAttribute("WaterWalking", on) end) end
+    end
+
+    -- NOCLIP continuo: o jogo reativa a colisao todo frame, entao reforcamos no Stepped
+    local RunService = game:GetService("RunService")
+    local NoclipSaved = {}
+    local noclipConn
+    local function startNoclip()
+        if noclipConn then return end
+        noclipConn = RunService.Stepped:Connect(function()
+            if not BF.Enabled then return end
+            local c = LP.Character; if not c then return end
+            for _, p in ipairs(c:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    if NoclipSaved[p] == nil then NoclipSaved[p] = p.CanCollide end
+                    p.CanCollide = false
+                end
+            end
+        end)
+    end
+    local function stopNoclip()
+        if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
+        if not CFG.Noclip then
+            for p, v in pairs(NoclipSaved) do
+                if p and p.Parent then pcall(function() p.CanCollide = v end) end
+            end
+        end
+        table.clear(NoclipSaved)
     end
 
     --================================================--
@@ -346,13 +373,22 @@ return function(ctx)
                 end
             end
         end
-        if t and t.Parent ~= c then t.Parent = c end
+        if t and t.Parent ~= c then
+            local hum = c:FindFirstChildOfClass("Humanoid")
+            if hum then pcall(function() hum:EquipTool(t) end) end
+            if t.Parent ~= c then t.Parent = c end
+        end
         return t
     end
-    local VU = game:GetService("VirtualUser")
+    -- clique de mouse real (VirtualInputManager dispara o soco do jogo)
+    local VIM = game:GetService("VirtualInputManager")
     local function atk(t)
         if t then pcall(function() t:Activate() end) end
-        pcall(function() VU:CaptureController(); VU:ClickButton1(Vector2.new(900, 500)) end)
+        local ok = pcall(function()
+            VIM:SendMouseButtonEvent(900, 500, 0, true, game, 1)
+            VIM:SendMouseButtonEvent(900, 500, 0, false, game, 1)
+        end)
+        if not ok and mouse1click then pcall(mouse1click) end
     end
 
     --================================================--
@@ -367,7 +403,7 @@ return function(ctx)
         end
     end
     local function restoreCollide(saved)
-        if CFG.Noclip then return end
+        if CFG.Noclip or noclipConn then return end
         for p, v in pairs(saved) do
             if p and p.Parent then pcall(function() p.CanCollide = v end) end
         end
@@ -442,7 +478,7 @@ return function(ctx)
         sendQ(q.quest, q.index)
         task.wait(0.5)
         BF.QuestCooldown = os.clock() + 0.8
-        return false
+        return hasQ()
     end
 
     local function bringNearby(mobName, center)
@@ -460,12 +496,10 @@ return function(ctx)
     local function engage(mob, q)
         local ch, h = GetChar(LP)
         if not ch or not h then return end
-        local oPS = h.PlatformStand
-        local saved = {}
         FlyFarmMoving = true
         pcall(function()
-            h.PlatformStand = true
             local t0 = os.clock()
+            local nextAtk = 0
             while BF.Enabled and os.clock() - t0 < 12 do
                 local mh = getRoot(mob)
                 local mhum = mob:FindFirstChildOfClass("Humanoid")
@@ -474,20 +508,20 @@ return function(ctx)
                 if not hrp or h.Health <= 0 then break end
                 if q and not hasQ() then break end
 
-                setNoCollide(ch, saved)
-                local above = mh.Position + Vector3.new(0, BF.Height, 0)
-                hrp.CFrame = CFrame.new(above, mh.Position)
+                -- fica logo acima do mob, olhando para ele (sem PlatformStand, senao o soco nao sai)
+                local pos = mh.Position + Vector3.new(0, BF.Height, 2)
+                hrp.CFrame = CFrame.lookAt(pos, mh.Position)
                 hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
                 if BF.BringMobs then bringNearby(mob.Name:match("^(.-)%s*%[") or mob.Name, mh.Position) end
 
-                local tool = equip()
-                atk(tool)
-                if BF.FastAttack then task.wait(0.05); atk(tool) end
-                task.wait(0.1)
+                if os.clock() >= nextAtk then
+                    atk(equip())
+                    nextAtk = os.clock() + (BF.FastAttack and 0.08 or 0.2)
+                end
+                task.wait(0.03)
             end
         end)
-        if h and h.Parent then h.PlatformStand = oPS end
-        restoreCollide(saved)
         FlyFarmMoving = false
     end
 
@@ -546,7 +580,7 @@ return function(ctx)
         if spot then
             if spot.water then applyWater(true) end
             local hrp = getHRP()
-            if hrp and (hrp.Position - spot.pos).Magnitude > 150 then
+            if hrp and #getMobs(mobName) == 0 and (hrp.Position - spot.pos).Magnitude > 150 then
                 notify("Auto Farm", "Indo ao ponto de "..mobName)
                 goTo(spot.pos + Vector3.new(0, 5, 0), 25)
                 return
@@ -559,6 +593,7 @@ return function(ctx)
 
     local function startFarm()
         if BF.FarmThread then return end
+        startNoclip()
         BF.FarmThread = task.spawn(function()
             while BF.Enabled do
                 local ok, err = pcall(farmTick)
@@ -599,6 +634,7 @@ return function(ctx)
 
     sFarm:AddToggle({ Name="Auto Farm", Default=false, Flag="AutoFarm", Callback=function(v)
         BF.Enabled = v
+        if not v then stopNoclip() end
         if v then
             if not next(SpawnsByMob) then scanSpawns() end
             startFarm()
@@ -611,7 +647,7 @@ return function(ctx)
     sFarm:AddToggle({ Name="Fly Farm", Default=true, Flag="FlyFarm", Callback=function(v) BF.FlyFarm = v end })
     sFarm:AddSlider({ Name="Velocidade Voo Farm", Min=20, Max=200, Default=60, Step=5, Suffix=" sp", Flag="FlyFarmSpeed", Callback=function(v) BF.FlySpeed = v end })
     sFarm:AddToggle({ Name="Fast Attack", Default=true, Flag="FastAttack", Callback=function(v) BF.FastAttack = v end })
-    sFarm:AddSlider({ Name="Altura sobre o mob", Min=2, Max=20, Default=6, Step=1, Suffix=" st", Flag="FarmHeight", Callback=function(v) BF.Height = v end })
+    sFarm:AddSlider({ Name="Altura sobre o mob", Min=2, Max=20, Default=4, Step=1, Suffix=" st", Flag="FarmHeight", Callback=function(v) BF.Height = v end })
     sFarm:AddToggle({ Name="Andar na Agua", Default=false, Flag="WaterWalk", Callback=function(v)
         BF.WaterWalk = v
         applyWater(v)
@@ -777,6 +813,7 @@ return function(ctx)
     -- permite parar tudo ao descarregar o hub
     return function()
         alive = false
+        stopNoclip()
         pcall(function() waterConn:Disconnect() end)
         BF.Enabled = false
     end
