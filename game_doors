@@ -1,16 +1,14 @@
 --!nocheck
 --================================================--
--- PREMIUM HUB v10.9 - DOORS MODULE
+-- PREMIUM HUB v10.9 - DOORS MODULE (CORRIGIDO)
 --================================================--
 return function(ctx)
     local Library=ctx.Library; local CFG=ctx.CFG; local Window=ctx.Window
     local LP=ctx.LP; local GetChar=ctx.GetChar
-    local IS_DOORS=ctx.L.IS_DOORS
+    -- Removida a trava estrita de IS_DOORS para evitar bloqueio pelo nome "PORTAS"
     local UIS=ctx.UIS; local ProximityPromptService=game:GetService("ProximityPromptService")
     local ReplicatedStorage=game:GetService("ReplicatedStorage")
     local Lighting=game:GetService("Lighting")
-
-    if not IS_DOORS then return end
 
     local function doorsGod()
         local _,hu = GetChar(LP); if not hu then return end
@@ -25,7 +23,7 @@ return function(ctx)
     local doorsTab = Window:AddTab("DOORS", "▣")
     local sDS = doorsTab:AddSection("Status")
     local dsSt = sDS:AddLabel("Verificando...")
-    task.spawn(function() task.wait(2); dsSt:Set("[OK] DOORS detectado") end)
+    task.spawn(function() task.wait(2); dsSt:Set("[OK] Módulo carregado com sucesso") end)
 
     local sGod = doorsTab:AddSection("Godmode")
     sGod:AddToggle({ Name="Anti-Jumpscare", Default=false, Flag="D_AntiJumpscare", Callback=function(v) CFG.D_AntiJumpscare=v end })
