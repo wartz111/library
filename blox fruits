@@ -159,15 +159,38 @@ return function(ctx)
         return ok and t or nil
     end
 
-    -- compara o titulo da UI com o mob da quest (tolera plural e prefixos)
+    -- entrada real da quest em ReplicatedStorage.Quests (Name da UI + Task)
+    local QuestData
+    local function getQuestEntry(q)
+        if QuestData == nil then
+            QuestData = false
+            pcall(function()
+                local mod = game:GetService("ReplicatedStorage"):FindFirstChild("Quests")
+                if mod then QuestData = require(mod) end
+            end)
+        end
+        local t = QuestData and QuestData[q.quest]
+        return t and t[q.index]
+    end
+
+    -- compara o titulo da UI com os nomes da quest (nome do mob, Name da UI e Task)
     local function questMatches(q)
         local t = getQT()
         if not t or t == "" then return true end
         local function strip(s) return (s:lower():gsub("^the ", ""):gsub("[^%a%d]", "")) end
-        local title, mob = strip(t), strip(q.mob)
-        if title == mob then return true end
-        local stem = mob:sub(1, math.max(3, #mob - 2))
-        return title:find(stem, 1, true) ~= nil
+        local title = strip(t)
+        local names = { q.mob }
+        local e = getQuestEntry(q)
+        if e then
+            if e.Name then table.insert(names, tostring(e.Name)) end
+            for mob in pairs(e.Task or {}) do table.insert(names, tostring(mob)) end
+        end
+        for _, nm in ipairs(names) do
+            local st = strip(nm)
+            st = st:sub(1, math.max(3, #st - 2))
+            if title:find(st, 1, true) then return true end
+        end
+        return false
     end
 
     -- ultima quest NORMAL (sem boss) cujo LevelReq <= nivel
@@ -195,7 +218,7 @@ return function(ctx)
 
     local function sendQ(name, idx)
         local cf = getCommF(); if not cf then return false end
-        return pcall(function() cf:InvokeServer("StartQuest", name, idx) end)
+        return pcall(function() return cf:InvokeServer("StartQuest", name, idx) end)
     end
     local function abandonQ()
         local cf = getCommF(); if not cf then return end
@@ -217,18 +240,36 @@ return function(ctx)
     local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
     local lastReport, lastErrKey = 0, nil
 
+    local webhookQueue, webhookBusy = {}, false
     local function sendWebhook(text)
         if not httpRequest or WEBHOOK_URL == "" then return false end
-        return pcall(function()
-            for i = 1, #text, 1800 do
-                httpRequest({
-                    Url = WEBHOOK_URL, Method = "POST",
-                    Headers = { ["Content-Type"] = "application/json" },
-                    Body = HttpService:JSONEncode({ content = "```\n"..text:sub(i, i + 1799).."\n```" }),
-                })
-                task.wait(0.5)
+        table.insert(webhookQueue, text)
+        if webhookBusy then return true end
+        webhookBusy = true
+        task.spawn(function()
+            while #webhookQueue > 0 do
+                local msg = table.remove(webhookQueue, 1)
+                local buf = ""
+                local function flush()
+                    if buf == "" then return end
+                    local body = HttpService:JSONEncode({ content = "```\n"..buf.."\n```" })
+                    pcall(function()
+                        httpRequest({ Url = WEBHOOK_URL, Method = "POST",
+                            Headers = { ["Content-Type"] = "application/json" }, Body = body })
+                    end)
+                    buf = ""
+                    task.wait(1)
+                end
+                for line in (msg.."\n"):gmatch("(.-)\n") do
+                    line = line:sub(1, 1500)
+                    if #buf + #line + 1 > 1800 then flush() end
+                    buf = (buf == "") and line or (buf.."\n"..line)
+                end
+                flush()
             end
+            webhookBusy = false
         end)
+        return true
     end
 
     -- envia erro/bug (com limite: 1 a cada 5s; mesmo erro 1 a cada 60s)
@@ -290,7 +331,7 @@ return function(ctx)
     --================================================--
     local SpawnsByMob = {}   -- ["bandit"] = { {pos, level, boss} }
     local SpawnNames = {}
-    local JUNK = { part = true, humanoidrootpart = true, model = true }
+    local JUNK = { part = true, humanoidrootpart = true, model = true, spawn = true }
 
     local function addSpawn(mob, lv, boss, pos)
         local k = mob:lower()
@@ -582,6 +623,10 @@ return function(ctx)
             BF.QuestCooldown = os.clock() + 1.5
             return false
         end
+        if (BF.QuestFails or 0) >= 3 then
+            if os.clock() - (BF.QuestFailAt or 0) < 30 then return "noquest" end
+            BF.QuestFails = 0
+        end
         if BF.QuestCooldown > os.clock() then return false end
         local h = getHRP(); if not h then return false end
 
@@ -598,10 +643,19 @@ return function(ctx)
             end
         end
 
-        sendQ(q.quest, q.index)
+        local okQ, res = sendQ(q.quest, q.index)
         task.wait(0.5)
         BF.QuestCooldown = os.clock() + 0.8
-        return hasQ()
+        if hasQ() then BF.QuestFails = 0; return true end
+        BF.QuestFails = (BF.QuestFails or 0) + 1
+        if BF.QuestFails >= 3 then
+            BF.QuestFailAt = os.clock()
+            reportBug("StartQuest nao ativou a quest",
+                ("%s #%d | ok=%s res=%s | dist NPC=%.0f"):format(q.quest, q.index, tostring(okQ), tostring(res),
+                    (getHRP() and (getHRP().Position - qp).Magnitude) or -1))
+            return "noquest"
+        end
+        return false
     end
 
     local function bringNearby(mobName, center)
@@ -745,7 +799,12 @@ return function(ctx)
         local mobName, q = resolveTarget()
         if not mobName then return end
 
-        if q and not ensureQuest(q) then return end
+        local qpos = q and questPos(q)
+        if q then
+            local r = ensureQuest(q)
+            if r == "noquest" then q = nil       -- quest nao ativa: bate nos mobs mesmo assim
+            elseif not r then return end
+        end
 
         -- ponto fixo (so quando nao ha mob vivo por perto)
         local spot = FARM_SPOTS[mobName:lower()]
@@ -759,7 +818,7 @@ return function(ctx)
             end
         end
 
-        local mob = huntMob(mobName, q and questPos(q))
+        local mob = huntMob(mobName, qpos)
         if BF.NoMobSince and os.clock() - BF.NoMobSince > 30 then
             BF.NoMobSince = os.clock()
             reportBug("sem mobs ha 30s", BF.snapshot and BF.snapshot() or "")
@@ -868,12 +927,12 @@ return function(ctx)
     end })
 
     -- saida de debug: F9 + console do executor + clipboard + label na UI
-    local function emit(lines)
+    local function emit(lines, noWebhook)
         local text = table.concat(lines, "\n")
         for _, l in ipairs(lines) do print(l) end
         pcall(function() rconsoleprint(text.."\n") end)
         local copied = pcall(function() setclipboard(text) end)
-        task.spawn(sendWebhook, text)
+        if not noWebhook then sendWebhook(text) end
         local short = {}
         for i = 1, math.min(#lines, 4) do short[i] = lines[i] end
         pcall(function() dbgLbl:Set(table.concat(short, " | ")) end)
@@ -960,7 +1019,7 @@ return function(ctx)
                 table.insert(L, ("  %s #%d | Lv%d | %s | %s%s"):format(questName, idx, e.LevelReq, tostring(e.Name), taskTxt, marker))
             end
         end
-        emit(L)
+        emit(L, true)  -- lista grande: so clipboard/F9
     end })
 
     sFarm:AddButton({ Name="Enviar relatorio ao Discord", Callback=function()
