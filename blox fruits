@@ -669,8 +669,10 @@ return function(ctx)
                 if hasQ() then break end
                 task.wait(0.25)
             end
-            BF.QuestFails = 0
-            return hasQ()
+            if hasQ() then return true end
+            -- servidor aceitou mas a UI nao mostrou: bate nos mobs assim mesmo
+            BF.BlockedUntil[key] = os.clock() + 30
+            return "noquest"
         end
         if okQ and res == 2 then
             BF.BlockedUntil[key] = os.clock() + 300   -- tenta de novo em 5 min
@@ -683,15 +685,10 @@ return function(ctx)
             return "noquest"
         end
 
-        -- codigo 1 ou resposta inesperada
-        BF.QuestFails = (BF.QuestFails or 0) + 1
-        if BF.QuestFails >= 3 then
-            BF.QuestFails = 0
-            BF.BlockedUntil[key] = os.clock() + 60    -- tenta de novo em 1 min
-            notify("Auto Farm", "StartQuest falhou (codigo " .. tostring(res) .. "): farmando sem quest")
-            return "noquest"
-        end
-        return false
+        -- codigo 1 ou resposta inesperada: nao deu, vai direto aos mobs
+        BF.BlockedUntil[key] = os.clock() + 90        -- volta ao NPC em 90 s
+        notify("Auto Farm", "Quest nao aceita (codigo " .. tostring(res) .. "): indo direto aos mobs")
+        return "noquest"
     end
 
     local function bringNearby(mobName, center)
