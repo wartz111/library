@@ -185,19 +185,87 @@ return function(ctx)
         return (b or n):lower()
     end
 
+    -- normaliza: tira nivel, simbolos, plural (Snowmen->snowman, Spies->spy)
+    local function norm(s)
+        local b = parseName(s)
+        s = (b or s):lower()
+        return (s:gsub("[^%a%d]", ""))
+    end
+    local function stemOf(n)
+        n = n:gsub("ies$", "y"):gsub("men$", "man"):gsub("s$", "")
+        return n
+    end
+    local function getRoot(m)
+        local r = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+        if not r then
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            r = hum and hum.RootPart
+        end
+        return r
+    end
+
+    -- mobs "estacionados" (longe do spawn / na origem) nao contam
+    local function validPos(mobName, pos)
+        if pos.Magnitude < 20 then return false end
+        local list = SpawnsByMob[mobName:lower()]
+        if not list or #list == 0 then return true end
+        for _, sp in ipairs(list) do
+            if (sp.pos - pos).Magnitude < 250 then return true end
+        end
+        return false
+    end
+
+    -- 1a passada: nome exato (normalizado). 2a: parcial, so se estiver perto
     local function getMobs(mobName)
-        local list = {}
+        local exact, fuzzy = {}, {}
         local enemies = workspace:FindFirstChild("Enemies")
-        if not enemies or not mobName then return list end
-        local target = mobName:lower()
+        if not enemies or not mobName then return exact end
+        local me = getHRP()
+        local tN = norm(mobName); local tS = stemOf(tN)
         for _, m in ipairs(enemies:GetChildren()) do
             local hum = m:FindFirstChildOfClass("Humanoid")
-            local hrp = m:FindFirstChild("HumanoidRootPart")
-            if hum and hrp and hum.Health > 0 and baseName(m.Name) == target then
-                table.insert(list, m)
+            local root = getRoot(m)
+            if hum and hum.Health > 0 and root and validPos(mobName, root.Position) then
+                local n = norm(m.Name); local s = stemOf(n)
+                if n == tN or s == tS then
+                    table.insert(exact, m)
+                elseif #s >= 4 and #tS >= 4 and (s:find(tS, 1, true) or tS:find(s, 1, true))
+                    and me and (root.Position - me.Position).Magnitude < 250 then
+                    table.insert(fuzzy, m)
+                end
             end
         end
-        return list
+        if #exact > 0 then return exact end
+        return fuzzy
+    end
+
+    -- qualquer inimigo vivo perto (ultimo recurso)
+    local function nearestAnyEnemy(from, radius)
+        local enemies = workspace:FindFirstChild("Enemies")
+        if not enemies then return nil end
+        local best, bestD
+        for _, m in ipairs(enemies:GetChildren()) do
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            local root = getRoot(m)
+            if hum and hum.Health > 0 and root and root.Position.Magnitude > 20 then
+                local d = (root.Position - from).Magnitude
+                if d <= radius and (not bestD or d < bestD) then best, bestD = m, d end
+            end
+        end
+        return best
+    end
+
+    -- percorre os spawns do mob, do mais perto de "ref" para o mais longe
+    local SpawnIdx = {}
+    local function pickSpawn(mobName, ref)
+        local list = SpawnsByMob[mobName:lower()]
+        if not list or #list == 0 then return nil end
+        local sorted = {}
+        for _, sp in ipairs(list) do table.insert(sorted, sp) end
+        table.sort(sorted, function(x, y) return (x.pos - ref).Magnitude < (y.pos - ref).Magnitude end)
+        local k = mobName:lower()
+        local i = ((SpawnIdx[k] or 0) % #sorted) + 1
+        return sorted[i], k
     end
 
     --================================================--
@@ -227,7 +295,11 @@ return function(ctx)
         if t and t.Parent ~= c then t.Parent = c end
         return t
     end
-    local function atk(t) if t then pcall(function() t:Activate() end) end end
+    local VU = game:GetService("VirtualUser")
+    local function atk(t)
+        if t then pcall(function() t:Activate() end) end
+        pcall(function() VU:CaptureController(); VU:ClickButton1(Vector2.new(900, 500)) end)
+    end
 
     --================================================--
     -- MOVIMENTO
@@ -321,7 +393,7 @@ return function(ctx)
 
     local function bringNearby(mobName, center)
         for _, m in ipairs(getMobs(mobName)) do
-            local mh = m:FindFirstChild("HumanoidRootPart")
+            local mh = getRoot(m)
             if mh and (mh.Position - center).Magnitude < 60 then
                 pcall(function()
                     mh.CFrame = CFrame.new(center + Vector3.new(0, -2, 0))
@@ -341,7 +413,7 @@ return function(ctx)
             h.PlatformStand = true
             local t0 = os.clock()
             while BF.Enabled and os.clock() - t0 < 12 do
-                local mh = mob:FindFirstChild("HumanoidRootPart")
+                local mh = getRoot(mob)
                 local mhum = mob:FindFirstChildOfClass("Humanoid")
                 if not mob.Parent or not mh or not mhum or mhum.Health <= 0 then break end
                 local hrp = getHRP()
@@ -369,25 +441,37 @@ return function(ctx)
         local h = getHRP(); if not h then return end
         local mobs = getMobs(mobName)
 
-        -- sem mobs vivos: vai ate o spawn mais proximo (fallback: NPC)
+        -- nenhum mob com o nome certo
         if #mobs == 0 then
-            local sp = nearestSpawn(mobName, h.Position)
+            -- ultimo recurso: ataca qualquer inimigo vivo perto
+            local near = nearestAnyEnemy(h.Position, 70)
+            if near then return near end
+
+            -- percorre os spawns perto do NPC, um por vez
+            local ref = fallbackPos or h.Position
+            local sp, key = pickSpawn(mobName, ref)
             local dest = sp and (sp.pos + Vector3.new(0, 10, 0))
                 or (fallbackPos and (fallbackPos + Vector3.new(0, 5, 0)))
-            if dest and (h.Position - dest).Magnitude > 30 then
-                notify("Auto Farm", "Indo para area de "..mobName)
-                goTo(dest, 20)
+            if dest then
+                if (h.Position - dest).Magnitude > 25 then
+                    notify("Auto Farm", "Procurando "..mobName)
+                    goTo(dest, 20)
+                else
+                    -- chegou e nao tem mob: espera respawn e vai ao proximo spawn
+                    task.wait(1.5)
+                    if key then SpawnIdx[key] = (SpawnIdx[key] or 0) + 1 end
+                end
             end
             return
         end
 
         table.sort(mobs, function(a, b)
-            local ah, bh = a:FindFirstChild("HumanoidRootPart"), b:FindFirstChild("HumanoidRootPart")
+            local ah, bh = getRoot(a), getRoot(b)
             if not ah or not bh then return false end
             return (h.Position - ah.Position).Magnitude < (h.Position - bh.Position).Magnitude
         end)
         local mob = mobs[1]
-        local mh = mob:FindFirstChild("HumanoidRootPart")
+        local mh = getRoot(mob)
         if not mh then return end
 
         if (h.Position - mh.Position).Magnitude > 20 then
@@ -514,6 +598,36 @@ return function(ctx)
             if not SpawnsByMob[q.mob:lower()] then print("  "..q.mob) end
         end
         Library:Notify({Title="Debug", Message="Listado no F9", Type="success"})
+    end })
+
+    sFarm:AddButton({ Name="Debug alvo atual (console)", Callback=function()
+        local mobName, q = resolveTarget()
+        print("=== DEBUG ALVO ===")
+        print("alvo:", mobName, "| normalizado:", mobName and norm(mobName))
+        print("achados por nome:", mobName and #getMobs(mobName) or 0)
+        print("spawns na pasta:", mobName and SpawnsByMob[mobName:lower()] and #SpawnsByMob[mobName:lower()] or 0)
+        local h = getHRP()
+        local enemies = workspace:FindFirstChild("Enemies")
+        if enemies and mobName then
+            print("todos com esse nome (valido = perto de um spawn):")
+            for _, m in ipairs(enemies:GetChildren()) do
+                local r = getRoot(m)
+                if r and norm(m.Name) == norm(mobName) then
+                    print(("  %s pos=%s valido=%s"):format(m.Name, tostring(r.Position), tostring(validPos(mobName, r.Position))))
+                end
+            end
+        end
+        if enemies and h then
+            print("inimigos vivos num raio de 150:")
+            for _, m in ipairs(enemies:GetChildren()) do
+                local r = getRoot(m)
+                local hu = m:FindFirstChildOfClass("Humanoid")
+                if r and hu and hu.Health > 0 and (r.Position - h.Position).Magnitude < 150 then
+                    print(("  '%s' -> '%s' (%.0f studs)"):format(m.Name, norm(m.Name), (r.Position - h.Position).Magnitude))
+                end
+            end
+        end
+        Library:Notify({Title="Debug", Message="Veja o F9", Type="success"})
     end })
 
     local sManual = bfTab:AddSection("Modo de Farm")
