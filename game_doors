@@ -2,13 +2,17 @@
 return function(ctx)
     local L = ctx.L
     local Library = ctx.Library
+    local Window = ctx.Window
     local Players = ctx.Players
     local ReplicatedStorage = game:GetService("ReplicatedStorage")
     local LP = Players.LocalPlayer
 
     --================================================--
-    -- 1. DETEÇÃO DO MODO DE JOGO (Floor / Modifiers)
+    -- 1. CRIAR ABA DO DOORS NA INTERFACE
     --================================================--
+    local doorsTab = Window:AddTab("Doors", "🚪")
+    local sDoorsInfo = doorsTab:AddSection("Informações & Estado")
+    
     local currentMode = "Desconhecido"
     pcall(function()
         local gameData = ReplicatedStorage:WaitForChild("GameData", 5)
@@ -20,9 +24,13 @@ return function(ctx)
         end
     end)
 
+    sDoorsInfo:AddButton({ Name = "Modo Atual: " .. tostring(currentMode), Callback = function()
+        Library:Notify({Title = "DOORS", Message = "Modo de jogo: " .. tostring(currentMode), Type = "info"})
+    end })
+
     Library:Notify({
         Title = "DOORS Carregado!",
-        Message = "Modo Detetado: " .. tostring(currentMode),
+        Message = "Aba 'Doors' adicionada ao menu! Modo: " .. tostring(currentMode),
         Type = "success",
         Duration = 7
     })
@@ -70,14 +78,12 @@ return function(ctx)
     end
 
     if currentRooms then
-        -- Analisa tudo o que já carregou nas salas
         for _, desc in ipairs(currentRooms:GetDescendants()) do
             task.spawn(function()
                 checkRoomDescendant(desc)
             end)
         end
 
-        -- Monitoriza em tempo real itens/saídas em novas salas e gavetas geradas
         currentRooms.DescendantAdded:Connect(function(desc)
             task.wait(0.1)
             checkRoomDescendant(desc)
@@ -90,7 +96,6 @@ return function(ctx)
     local function handleEntity(entity)
         if not entity or not entity.Parent then return end
 
-        -- Notificação visual no ecrã
         Library:Notify({
             Title = "⚠️ ENTIDADE DETETADA!",
             Message = entity.Name .. " está no mapa!",
@@ -98,7 +103,6 @@ return function(ctx)
             Duration = 6
         })
 
-        -- ESP (Highlight) vermelho à volta da entidade
         if not entity:FindFirstChild("EntityHighlight") then
             local hl = Instance.new("Highlight")
             hl.Name = "EntityHighlight"
@@ -115,20 +119,17 @@ return function(ctx)
         local liveEntitiesFolder = workspace:WaitForChild("LiveEntities", 10) or workspace:FindFirstChild("LiveEntities")
         
         if liveEntitiesFolder then
-            -- Verifica entidades que já possam estar no mapa ao injetar
             for _, entity in ipairs(liveEntitiesFolder:GetChildren()) do
                 task.spawn(function()
                     handleEntity(entity)
                 end)
             end
 
-            -- Dispara assim que uma nova entidade é colocada na pasta LiveEntities
             liveEntitiesFolder.ChildAdded:Connect(function(entity)
                 task.wait(0.1)
                 handleEntity(entity)
             end)
         else
-            -- Caso a pasta seja criada no workspace depois de o script iniciar
             workspace.ChildAdded:Connect(function(child)
                 if child.Name == "LiveEntities" then
                     child.ChildAdded:Connect(function(entity)
@@ -140,6 +141,5 @@ return function(ctx)
         end
     end
 
-    -- Inicia o loop de monitorização de entidades
     task.spawn(setupLiveEntities)
 end
