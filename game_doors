@@ -1,0 +1,91 @@
+--!nocheck
+--================================================--
+-- PREMIUM HUB v10.9 - DOORS MODULE
+--================================================--
+return function(ctx)
+    local Library=ctx.Library; local CFG=ctx.CFG; local Window=ctx.Window
+    local LP=ctx.LP; local GetChar=ctx.GetChar
+    local IS_DOORS=ctx.L.IS_DOORS
+    local UIS=ctx.UIS; local ProximityPromptService=game:GetService("ProximityPromptService")
+    local ReplicatedStorage=game:GetService("ReplicatedStorage")
+    local Lighting=game:GetService("Lighting")
+
+    if not IS_DOORS then return end
+
+    local function doorsGod()
+        local _,hu = GetChar(LP); if not hu then return end
+        if CFG.D_AntiJumpscare or CFG.D_FigureGod then
+            pcall(function() if hu.Health<hu.MaxHealth then hu.Health=hu.MaxHealth end end)
+        end
+    end
+
+    --================================================--
+    -- UI
+    --================================================--
+    local doorsTab = Window:AddTab("DOORS", "▣")
+    local sDS = doorsTab:AddSection("Status")
+    local dsSt = sDS:AddLabel("Verificando...")
+    task.spawn(function() task.wait(2); dsSt:Set("[OK] DOORS detectado") end)
+
+    local sGod = doorsTab:AddSection("Godmode")
+    sGod:AddToggle({ Name="Anti-Jumpscare", Default=false, Flag="D_AntiJumpscare", Callback=function(v) CFG.D_AntiJumpscare=v end })
+    sGod:AddToggle({ Name="Figure Godmode", Default=false, Flag="D_FigureGod", Callback=function(v) CFG.D_FigureGod=v end })
+
+    local sJog = doorsTab:AddSection("Jogador")
+    sJog:AddSlider({ Name="Velocidade", Min=16, Max=100, Default=16, Step=1, Flag="D_WalkSpeed", Callback=function(v) CFG.D_WalkSpeed=v end })
+    sJog:AddToggle({ Name="Noclip", Default=false, Flag="D_Noclip", Callback=function(v) CFG.D_Noclip=v end })
+    sJog:AddToggle({ Name="Pulo Infinito", Default=false, Flag="D_InfJump", Callback=function(v) CFG.D_InfJump=v end })
+
+    local sAuto = doorsTab:AddSection("Automacao")
+    sAuto:AddToggle({ Name="Interacao Instantanea", Default=false, Flag="D_InstInt", Callback=function(v) CFG.D_InstantInteract=v end })
+
+    local sDiv = doorsTab:AddSection("Diversos")
+    sDiv:AddButton({ Name="Reviver", Callback=function()
+        pcall(function()
+            local c=LP.Character
+            if c then local h=c:FindFirstChildOfClass("Humanoid"); if h then h.Health=h.MaxHealth end end
+            for _, r in ipairs(ReplicatedStorage:GetDescendants()) do
+                if r:IsA("RemoteEvent") and r.Name:lower():find("revive") then r:FireServer() end
+            end
+        end)
+    end })
+    sDiv:AddButton({ Name="Lobby", Callback=function()
+        pcall(function()
+            for _, r in ipairs(ReplicatedStorage:GetDescendants()) do
+                if r:IsA("RemoteEvent") and r.Name:lower():find("lobby") then r:FireServer() end
+            end
+        end)
+    end })
+
+    local sEnv = doorsTab:AddSection("Ambiente")
+    sEnv:AddSlider({ Name="Brilho", Min=0, Max=20, Default=0, Step=1, Flag="D_Bright", Callback=function(v) CFG.D_Brightness=v; Lighting.Brightness=v end })
+
+    --================================================--
+    -- LOOPS
+    --================================================--
+    task.spawn(function() while task.wait(0.1) do
+        if CFG.D_Noclip and LP.Character then
+            for _, v in ipairs(LP.Character:GetDescendants()) do if v:IsA("BasePart") then v.CanCollide=false end end
+        end
+    end end)
+
+    task.spawn(function() while task.wait(0.3) do
+        if LP.Character then
+            local h = LP.Character:FindFirstChildOfClass("Humanoid")
+            if h then h.WalkSpeed=CFG.D_WalkSpeed end
+        end
+    end end)
+
+    UIS.JumpRequest:Connect(function()
+        if CFG.D_InfJump and LP.Character then
+            local h = LP.Character:FindFirstChildOfClass("Humanoid")
+            if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+        end
+    end)
+
+    ProximityPromptService.PromptShown:Connect(function(p)
+        if CFG.D_InstantInteract then p.HoldDuration=0 end
+    end)
+
+    task.spawn(function() while task.wait(0.2) do pcall(doorsGod) end end)
+end
