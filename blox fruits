@@ -1,6 +1,6 @@
 --!nocheck
 --================================================--
--- PREMIUM HUB v12 - BLOX FRUITS MODULE (versao unificada)
+-- PREMIUM HUB v13 - BLOX FRUITS MODULE (versao unificada)
 --================================================--
 return function(ctx)
     local Library = ctx.Library; local CFG = ctx.CFG; local Window = ctx.Window
@@ -133,10 +133,12 @@ return function(ctx)
         Enabled = false, FarmThread = nil,
         SelectedQuest = nil, FreeMob = nil, BossMob = nil,
         FlyFarm = true, FlySpeed = 60, FastAttack = true, BringMobs = false,
-        WeaponType = "Melee", Height = 4, WaterWalk = false,
+        WeaponType = "Melee", Height = 7, WaterWalk = false,
         QuestCooldown = 0, LastNotify = 0,
         OrbitStart = 0, OrbitAnchor = nil,
         Blocked = {}, LastQuestRes = nil,
+        AutoBuso = false, AutoStats = false, StatName = "Melee",
+        AntiAFK = true, SafeMode = true, SafeHP = 35, FPSBoost = false,
     }
     local FlyFarmMoving = false
     SetFlyFarmStateMoving(function() return FlyFarmMoving end)
@@ -236,54 +238,58 @@ return function(ctx)
         pcall(function() Library:Notify({Title = title, Message = msg, Type = kind or "info", Duration = dur or 1.5}) end)
     end
 
-    -- WEBHOOK de bugs (Discord). Troque a URL aqui; deixe "" para desligar.
-    local WEBHOOK_URL = "https://discord.com/api/webhooks/1556029256541147246/06J5bmMO1eOl2qvE35xoNX5wozswqKIi7QUs0kdmfbv58UFvf3JLsvE34tiF9dYsJzgN"
-    local HttpService = game:GetService("HttpService")
-    local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
-    local lastReport, lastErrKey = 0, nil
-
-    local webhookQueue, webhookBusy = {}, false
-    local function sendWebhook(text)
-        if not httpRequest or WEBHOOK_URL == "" then return false end
-        table.insert(webhookQueue, text)
-        if webhookBusy then return true end
-        webhookBusy = true
-        task.spawn(function()
-            while #webhookQueue > 0 do
-                local msg = table.remove(webhookQueue, 1)
-                local buf = ""
-                local function flush()
-                    if buf == "" then return end
-                    local body = HttpService:JSONEncode({ content = "```\n"..buf.."\n```" })
-                    pcall(function()
-                        httpRequest({ Url = WEBHOOK_URL, Method = "POST",
-                            Headers = { ["Content-Type"] = "application/json" }, Body = body })
-                    end)
-                    buf = ""
-                    task.wait(1)
-                end
-                for line in (msg.."\n"):gmatch("(.-)\n") do
-                    line = line:sub(1, 1500)
-                    if #buf + #line + 1 > 1800 then flush() end
-                    buf = (buf == "") and line or (buf.."\n"..line)
-                end
-                flush()
-            end
-            webhookBusy = false
-        end)
-        return true
+    -- Haki de Armamento: so liga se ainda nao estiver ativo
+    local function ensureBuso()
+        local c = LP.Character
+        if c and not c:FindFirstChild("HasBuso") then
+            local cf = getCommF()
+            if cf then pcall(function() cf:InvokeServer("Buso") end) end
+        end
     end
 
-    -- envia erro/bug (com limite: 1 a cada 5s; mesmo erro 1 a cada 60s)
-    local function reportBug(kind, msg)
-        local key = kind..tostring(msg)
-        if key == lastErrKey and os.clock() - lastReport < 60 then return end
-        if os.clock() - lastReport < 5 then return end
-        lastErrKey = key; lastReport = os.clock()
-        local alvo = BF.BossMob or BF.FreeMob or (BF.SelectedQuest and BF.SelectedQuest.mob) or "auto"
-        local text = ("[%s] v12 | PlaceId=%s | Lv=%s | modo=%s\n%s"):format(
-            kind, tostring(game.PlaceId), tostring(getLvl()), tostring(alvo), tostring(msg))
-        task.spawn(sendWebhook, text)
+    -- gasta pontos de status (ate 3 por chamada)
+    local function autoStats()
+        local ok, pts = pcall(function() return LP.Data.Points.Value end)
+        if not ok or type(pts) ~= "number" or pts <= 0 then return end
+        local cf = getCommF(); if not cf then return end
+        pcall(function() cf:InvokeServer("AddPoint", BF.StatName, math.min(pts, 3)) end)
+    end
+
+    -- reduz efeitos e sombras (particulas desligadas so voltam ao reentrar)
+    local function applyFPSBoost(on)
+        pcall(function()
+            local L = game:GetService("Lighting")
+            L.GlobalShadows = not on
+            if on then L.FogEnd = 9e9 end
+        end)
+        if not on then return end
+        task.spawn(function()
+            local n = 0
+            for _, v in ipairs(workspace:GetDescendants()) do
+                if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke")
+                    or v:IsA("Fire") or v:IsA("Sparkles") then
+                    pcall(function() v.Enabled = false end)
+                end
+                n += 1
+                if n % 400 == 0 then task.wait() end
+            end
+        end)
+    end
+
+    -- Modo Seguro: com vida baixa sobe 120 studs e espera regenerar
+    local function safeRetreat()
+        local ch, h, hrp = GetChar(LP)
+        if not hrp or not h then return end
+        notify("Modo Seguro", "Vida baixa: recuando")
+        local up = hrp.Position + Vector3.new(0, 120, 0)
+        local t0 = os.clock()
+        while BF.Enabled and BF.SafeMode and h.Parent and h.Health > 0 and os.clock() - t0 < 25 do
+            hrp = getHRP(); if not hrp then break end
+            hrp.CFrame = CFrame.new(up)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            if h.Health / math.max(h.MaxHealth, 1) >= 0.8 then break end
+            task.wait(0.1)
+        end
     end
 
     -- WaterWalking: atributo do proprio jogo
@@ -590,7 +596,7 @@ return function(ctx)
         if h and h.Parent then h.PlatformStand = oPS; h.AutoRotate = oAR end
         restoreCollide(saved)
         FlyFarmMoving = false
-        if not ok then warn("flyTo:", err); reportBug("flyTo erro", err) end
+        if not ok then warn("flyTo:", err) end
         return reached
     end
 
@@ -667,7 +673,7 @@ return function(ctx)
         end
         if okQ and res == 2 then
             BF.Blocked[key] = math.huge
-            reportBug("quest ja concluida (codigo 2)", key .. " | nivel " .. tostring(getLvl()))
+            notify("Auto Farm", "Quest ja concluida: farmando sem quest")
             return "noquest"
         end
         if okQ and type(res) == "number" and res > 2 then
@@ -680,9 +686,7 @@ return function(ctx)
         BF.QuestFails = (BF.QuestFails or 0) + 1
         if BF.QuestFails >= 3 then
             BF.QuestFailAt = os.clock()
-            reportBug("StartQuest falhou",
-                ("%s | ok=%s codigo=%s | dist NPC=%.0f"):format(key, tostring(okQ), tostring(res),
-                    (getHRP() and (getHRP().Position - qp).Magnitude) or -1))
+            notify("Auto Farm", "StartQuest falhou (codigo " .. tostring(res) .. "): farmando sem quest")
             return "noquest"
         end
         return false
@@ -716,6 +720,11 @@ return function(ctx)
                 if not hrp or h.Health <= 0 then break end
                 if q and not hasQ() then break end
 
+                if BF.SafeMode and h.MaxHealth > 0 and h.Health / h.MaxHealth < BF.SafeHP / 100 then
+                    safeRetreat()
+                    break
+                end
+
                 local pos = mh.Position + Vector3.new(0, BF.Height, 2)
                 hrp.CFrame = CFrame.lookAt(pos, mh.Position)
                 hrp.AssemblyLinearVelocity = Vector3.zero
@@ -737,7 +746,6 @@ return function(ctx)
         local mobs = getMobs(mobName)
 
         if #mobs == 0 then
-            BF.NoMobSince = BF.NoMobSince or os.clock()
             -- 1) inimigo vivo por perto (raio curto se ha spawns; amplo se nao ha)
             local radii = spawnsFor(mobName) and { 70 } or { 100, 200, 400, 800 }
             for _, r in ipairs(radii) do
@@ -788,40 +796,12 @@ return function(ctx)
 
         BF.OrbitStart = 0
         BF.OrbitAnchor = nil
-        BF.NoMobSince = nil
 
         if (h.Position - mh.Position).Magnitude > 20 then
             local dest = mh.Position + Vector3.new(0, BF.Height, 0)
             goTo(dest, travelTimeout(h.Position, dest, 60))
         end
         return mob
-    end
-
-    -- resumo do estado atual (usado nos relatorios)
-    function BF.snapshot()
-        local mobName, q = resolveTarget()
-        local h = getHRP()
-        local sl = mobName and spawnsFor(mobName)
-        local L = {
-            ("alvo=%s quest=%s hasQ=%s titulo=%s match=%s"):format(tostring(mobName), q and q.quest or "-",
-                tostring(hasQ()), tostring(getQT()), tostring(q and questMatches(q))),
-            ("achados=%d spawns=%d fly=%s pos=%s"):format(mobName and #getMobs(mobName) or 0, sl and #sl or 0,
-                tostring(BF.FlyFarm), h and tostring(h.Position) or "sem personagem"),
-        }
-        table.insert(L, "ultimo StartQuest (ok / codigo): " .. tostring(BF.LastQuestRes))
-        local enemies = workspace:FindFirstChild("Enemies")
-        if enemies and h then
-            local n = 0
-            for _, m in ipairs(enemies:GetChildren()) do
-                local r = getRoot(m); local hu = m:FindFirstChildOfClass("Humanoid")
-                if r and hu and hu.Health > 0 and (r.Position - h.Position).Magnitude < 300 then
-                    n += 1
-                    if n <= 8 then table.insert(L, ("  '%s' %.0f studs"):format(m.Name, (r.Position - h.Position).Magnitude)) end
-                end
-            end
-            table.insert(L, "inimigos < 300 studs: "..n)
-        end
-        return table.concat(L, "\n")
     end
 
     local function farmTick()
@@ -850,10 +830,6 @@ return function(ctx)
         end
 
         local mob = huntMob(mobName, qpos)
-        if BF.NoMobSince and os.clock() - BF.NoMobSince > 30 then
-            BF.NoMobSince = os.clock()
-            reportBug("sem mobs ha 30s", BF.snapshot and BF.snapshot() or "")
-        end
         if mob then engage(mob, q) end
     end
 
@@ -863,7 +839,7 @@ return function(ctx)
         BF.FarmThread = task.spawn(function()
             while BF.Enabled do
                 local ok, err = pcall(farmTick)
-                if not ok then warn("farmTick:", err); FlyFarmMoving = false; reportBug("farmTick erro", err) end
+                if not ok then warn("farmTick:", err); FlyFarmMoving = false end
                 task.wait(0.15)
             end
             BF.FarmThread = nil
@@ -914,7 +890,7 @@ return function(ctx)
     sFarm:AddToggle({ Name="Fly Farm", Default=true, Flag="FlyFarm", Callback=function(v) BF.FlyFarm = v end })
     sFarm:AddSlider({ Name="Velocidade Voo Farm", Min=20, Max=200, Default=60, Step=5, Suffix=" sp", Flag="FlyFarmSpeed", Callback=function(v) BF.FlySpeed = v end })
     sFarm:AddToggle({ Name="Fast Attack", Default=true, Flag="FastAttack", Callback=function(v) BF.FastAttack = v end })
-    sFarm:AddSlider({ Name="Altura sobre o mob", Min=2, Max=20, Default=4, Step=1, Suffix=" st", Flag="FarmHeight", Callback=function(v) BF.Height = v end })
+    sFarm:AddSlider({ Name="Altura sobre o mob", Min=2, Max=20, Default=7, Step=1, Suffix=" st", Flag="FarmHeight", Callback=function(v) BF.Height = v end })
     sFarm:AddToggle({ Name="Andar na Agua", Default=false, Flag="WaterWalk", Callback=function(v)
         BF.WaterWalk = v
         applyWater(v)
@@ -958,12 +934,11 @@ return function(ctx)
     end })
 
     -- saida de debug: F9 + console do executor + clipboard + label na UI
-    local function emit(lines, noWebhook)
+    local function emit(lines)
         local text = table.concat(lines, "\n")
         for _, l in ipairs(lines) do print(l) end
         pcall(function() rconsoleprint(text.."\n") end)
         local copied = pcall(function() setclipboard(text) end)
-        if not noWebhook then sendWebhook(text) end
         local short = {}
         for i = 1, math.min(#lines, 4) do short[i] = lines[i] end
         pcall(function() dbgLbl:Set(table.concat(short, " | ")) end)
@@ -999,6 +974,7 @@ return function(ctx)
         local L = {
             "alvo: "..tostring(mobName).." | achados: "..(mobName and #getMobs(mobName) or 0).." | spawns: "..(sl and #sl or 0),
             "hasQ: "..tostring(hasQ()).." | titulo: "..tostring(getQT()).." | match: "..tostring(q and questMatches(q)),
+            "ultimo StartQuest (ok / codigo): "..tostring(BF.LastQuestRes),
         }
         if q then
             local qp = questPos(q)
@@ -1050,12 +1026,7 @@ return function(ctx)
                 table.insert(L, ("  %s #%d | Lv%d | %s | %s%s"):format(questName, idx, e.LevelReq, tostring(e.Name), taskTxt, marker))
             end
         end
-        emit(L, true)  -- lista grande: so clipboard/F9
-    end })
-
-    sFarm:AddButton({ Name="Enviar relatorio ao Discord", Callback=function()
-        local sent = sendWebhook("[manual] v12 | PlaceId="..tostring(game.PlaceId).." | Lv="..tostring(getLvl()).."\n"..BF.snapshot())
-        Library:Notify({Title="Webhook", Message=sent and "Enviado" or (httpRequest and "Falhou" or "Executor sem request()"), Type=sent and "success" or "warn"})
+        emit(L)
     end })
 
     sFarm:AddButton({ Name="Salvar minha posicao como ponto do mob", Callback=function()
@@ -1066,6 +1037,18 @@ return function(ctx)
         print(("FARM_SPOTS[%q] = { pos = V(%.2f, %.2f, %.2f), water = %s }"):format(
             mobName:lower(), h.Position.X, h.Position.Y, h.Position.Z, tostring(BF.WaterWalk)))
         Library:Notify({Title="Ponto salvo", Message=mobName.." (copie a linha do F9 p/ manter)", Type="success"})
+    end })
+
+    local sUtil = bfTab:AddSection("Utilidades")
+    sUtil:AddToggle({ Name="Auto Haki (Buso)", Default=false, Flag="AutoBuso", Callback=function(v) BF.AutoBuso = v end })
+    sUtil:AddToggle({ Name="Auto Stats", Default=false, Flag="AutoStats", Callback=function(v) BF.AutoStats = v end })
+    sUtil:AddDropdown({ Name="Stat para upar", Options={"Melee","Defense","Sword","Gun","Demon Fruit"}, Default="Melee", Flag="StatName", Callback=function(v) BF.StatName = v or "Melee" end })
+    sUtil:AddToggle({ Name="Modo Seguro (vida baixa)", Default=true, Flag="SafeMode", Callback=function(v) BF.SafeMode = v end })
+    sUtil:AddSlider({ Name="Recuar abaixo de", Min=10, Max=70, Default=35, Step=5, Suffix="%", Flag="SafeHP", Callback=function(v) BF.SafeHP = v end })
+    sUtil:AddToggle({ Name="Anti-AFK", Default=true, Flag="AntiAFK", Callback=function(v) BF.AntiAFK = v end })
+    sUtil:AddToggle({ Name="FPS Boost", Default=false, Flag="FPSBoost", Callback=function(v)
+        BF.FPSBoost = v
+        applyFPSBoost(v)
     end })
 
     local sManual = bfTab:AddSection("Modo de Farm")
@@ -1122,6 +1105,8 @@ return function(ctx)
                 infoLbl:Set("Nv: "..l.." | Quest: "..(hasQ() and (t or "ativa") or "nenhuma"))
                 updStatus()
                 if BF.WaterWalk then applyWater(true) end
+                if BF.AutoBuso then ensureBuso() end
+                if BF.AutoStats then autoStats() end
             end)
             task.wait(1)
         end
@@ -1132,11 +1117,21 @@ return function(ctx)
         if BF.WaterWalk then applyWater(true) end
     end)
 
+    local VU = game:GetService("VirtualUser")
+    local afkConn = LP.Idled:Connect(function()
+        if not BF.AntiAFK then return end
+        pcall(function()
+            VU:CaptureController()
+            VU:ClickButton2(Vector2.new())
+        end)
+    end)
+
     -- limpeza ao descarregar o hub
     return function()
         alive = false
         BF.Enabled = false
         stopNoclip()
         pcall(function() waterConn:Disconnect() end)
+        pcall(function() afkConn:Disconnect() end)
     end
 end
