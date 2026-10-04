@@ -1,0 +1,71 @@
+--!nocheck
+--================================================--
+-- PREMIUM HUB v11.0 - LOADER
+--================================================--
+local BASE_URL = "https://raw.githubusercontent.com/wartz111/library/refs/heads/main/"
+
+-- Carrega Library base
+local ok, Library = pcall(function()
+    return loadstring(game:HttpGet(BASE_URL .. "library.lua"))()
+end)
+
+if not ok or not Library then
+    warn("[PremiumHub] Falha ao carregar library.lua: " .. tostring(Library))
+    return
+end
+
+-- Detecta o jogo
+local Players = game:GetService("Players")
+local MarketplaceService = game:GetService("MarketplaceService")
+local LP = Players.LocalPlayer
+local GAME_NAME = "Unknown"
+local IS_BF, IS_DOORS, IS_MM2 = false, false, false
+
+pcall(function()
+    local info = MarketplaceService:GetProductInfo(game.PlaceId)
+    if info and info.Name then
+        GAME_NAME = info.Name
+        local n = info.Name:lower()
+        if n:find("blox") and n:find("fruit") then IS_BF = true end
+        if n:find("doors") then IS_DOORS = true end
+        if n:find("murder") and n:find("mystery") then IS_MM2 = true end
+    end
+end)
+
+if game.PlaceId == 6516141723 then IS_DOORS = true end
+if game.PlaceId == 142823291 then IS_MM2 = true end
+
+Library.GameName = GAME_NAME
+Library.IS_BF = IS_BF
+Library.IS_DOORS = IS_DOORS
+Library.IS_MM2 = IS_MM2
+
+print("[PremiumHub] Jogo detectado: " .. GAME_NAME)
+
+-- Carrega módulos na ordem
+local function loadModule(name)
+    local ok, err = pcall(function()
+        local code = game:HttpGet(BASE_URL .. name)
+        local fn = loadstring(code)
+        if fn then fn(Library) end
+    end)
+    if not ok then warn("[PremiumHub] Erro em " .. name .. ": " .. tostring(err)) end
+end
+
+-- Ordem: universal primeiro, depois jogo específico
+loadModule("universal.lua")
+
+if IS_BF then
+    print("[PremiumHub] Carregando modulo Blox Fruits...")
+    loadModule("blox_fruits.lua")
+elseif IS_DOORS then
+    print("[PremiumHub] Carregando modulo DOORS...")
+    loadModule("doors.lua")
+elseif IS_MM2 then
+    print("[PremiumHub] Carregando modulo MM2...")
+    loadModule("mm2.lua")
+else
+    print("[PremiumHub] Jogo nao suportado - apenas features universais")
+end
+
+print("[PremiumHub] Carregamento completo!")
