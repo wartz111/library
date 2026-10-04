@@ -136,7 +136,7 @@ return function(ctx)
         WeaponType = "Melee", Height = 7, WaterWalk = false,
         QuestCooldown = 0, LastNotify = 0,
         OrbitStart = 0, OrbitAnchor = nil,
-        Blocked = {}, LastQuestRes = nil,
+        BlockedLvl = {}, BlockedUntil = {}, LastQuestRes = nil,
         AutoBuso = false, AutoStats = false, StatName = "Melee",
         AntiAFK = true, SafeMode = true, SafeHP = 35, FPSBoost = false,
     }
@@ -632,14 +632,15 @@ return function(ctx)
             BF.QuestCooldown = os.clock() + 1.5
             return false
         end
-        -- quest bloqueada pelo servidor (nivel baixo / ja concluida)
-        local need = BF.Blocked[key]
-        if need then
-            if (getLvl() or 0) >= need then BF.Blocked[key] = nil else return "noquest" end
+        -- recusada pelo servidor: farma sem quest e volta ao NPC depois de um tempo
+        local needLvl = BF.BlockedLvl[key]
+        if needLvl then
+            if (getLvl() or 0) >= needLvl then BF.BlockedLvl[key] = nil else return "noquest" end
         end
-        if (BF.QuestFails or 0) >= 3 then
-            if os.clock() - (BF.QuestFailAt or 0) < 30 then return "noquest" end
-            BF.QuestFails = 0
+        local untilT = BF.BlockedUntil[key]
+        if untilT then
+            if os.clock() < untilT then return "noquest" end
+            BF.BlockedUntil[key] = nil
         end
         if BF.QuestCooldown > os.clock() then return false end
         local h = getHRP(); if not h then return false end
@@ -672,12 +673,12 @@ return function(ctx)
             return hasQ()
         end
         if okQ and res == 2 then
-            BF.Blocked[key] = math.huge
+            BF.BlockedUntil[key] = os.clock() + 300   -- tenta de novo em 5 min
             notify("Auto Farm", "Quest ja concluida: farmando sem quest")
             return "noquest"
         end
         if okQ and type(res) == "number" and res > 2 then
-            BF.Blocked[key] = res
+            BF.BlockedLvl[key] = res
             notify("Auto Farm", "Quest pede nivel " .. res .. ": farmando sem quest")
             return "noquest"
         end
@@ -685,7 +686,8 @@ return function(ctx)
         -- codigo 1 ou resposta inesperada
         BF.QuestFails = (BF.QuestFails or 0) + 1
         if BF.QuestFails >= 3 then
-            BF.QuestFailAt = os.clock()
+            BF.QuestFails = 0
+            BF.BlockedUntil[key] = os.clock() + 60    -- tenta de novo em 1 min
             notify("Auto Farm", "StartQuest falhou (codigo " .. tostring(res) .. "): farmando sem quest")
             return "noquest"
         end
