@@ -1,6 +1,6 @@
 --!nocheck
 --================================================--
--- PREMIUM HUB v11 - BLOX FRUITS MODULE
+-- PREMIUM HUB v12 - BLOX FRUITS MODULE (versao unificada)
 --================================================--
 return function(ctx)
     local Library = ctx.Library; local CFG = ctx.CFG; local Window = ctx.Window
@@ -10,187 +10,128 @@ return function(ctx)
 
     if not IS_BLOX_FRUITS then return end
 
+    local RunService = game:GetService("RunService")
+    local VIM = game:GetService("VirtualInputManager")
+
     --================================================--
-    -- DADOS
-    -- Baseado no dump real de ReplicatedStorage.Quests
+    -- HELPERS BASICOS (usados por varias secoes)
     --================================================--
-    local function Q(minLevel, mob, quest, index, npc, pos)
-        return { minLevel = minLevel, mob = mob, quest = quest, index = index, npc = npc, pos = pos }
+    local function getHRP()
+        local c = LP.Character
+        return c and c:FindFirstChild("HumanoidRootPart")
+    end
+    local function getRoot(m)
+        local r = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+        if not r then
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            r = hum and hum.RootPart
+        end
+        return r
+    end
+    -- "Snow Bandit [Lv. 90] [Boss]" -> "Snow Bandit", 90, true
+    local function parseName(name)
+        local mob, lv, rest = name:match("^(.-)%s*%[Lv%.%s*(%d+)%](.*)$")
+        if not mob then return nil end
+        return mob, tonumber(lv), (rest or ""):find("Boss") ~= nil
+    end
+    local function norm(s)
+        local b = parseName(s)
+        s = (b or s):lower()
+        return (s:gsub("[^%a%d]", ""))
+    end
+    -- tira plural (Snowmen->snowman, Spies->spy, Guards->guard)
+    local function stemOf(n)
+        n = n:gsub("ies$", "y"):gsub("men$", "man"):gsub("s$", "")
+        return n
     end
 
-    -- Tabela COMPLETA baseada no dump oficial
-    -- (todos os quests, incluindo bosses das 3a entradas)
-    local QUESTS = {
-        -- BanditQuest1
-        Q(0,    "Bandit",              "BanditQuest1",  1, "Bandit Quest Giver",     Vector3.new(1059,16,1547)),
-        -- JungleQuest
-        Q(10,   "Monkey",              "JungleQuest",   1, "Jungle Quest Giver",     Vector3.new(-1599,22,154)),
-        Q(15,   "Gorilla",             "JungleQuest",   2, "Jungle Quest Giver",     Vector3.new(-1599,22,154)),
-        Q(20,   "The Gorilla King",    "JungleQuest",   3, "Jungle Quest Giver",     Vector3.new(-1599,22,154)),
-        -- BuggyQuest1
-        Q(30,   "Pirate",              "BuggyQuest1",   1, "Buggy Quest Giver",      Vector3.new(-1140,15,3930)),
-        Q(40,   "Brute",               "BuggyQuest1",   2, "Buggy Quest Giver",      Vector3.new(-1140,15,3930)),
-        Q(55,   "Chef",                "BuggyQuest1",   3, "Buggy Quest Giver",      Vector3.new(-1140,15,3930)),
-        -- DesertQuest
-        Q(60,   "Desert Bandit",       "DesertQuest",   1, "Desert Quest Giver",     Vector3.new(954,6,4070)),
-        Q(75,   "Desert Officer",      "DesertQuest",   2, "Desert Quest Giver",     Vector3.new(954,6,4070)),
-        -- SnowQuest
-        Q(90,   "Snow Bandit",         "SnowQuest",     1, "Snow Quest Giver",       Vector3.new(1047,21,-5430)),
-        Q(100,  "Snowman",             "SnowQuest",     2, "Snow Quest Giver",       Vector3.new(1047,21,-5430)),
-        Q(105,  "Yeti",                "SnowQuest",     3, "Snow Quest Giver",       Vector3.new(1047,21,-5430)),
-        -- MarineQuest2
-        Q(120,  "Chief Petty Officer", "MarineQuest2",  1, "Marine Quest Giver",     Vector3.new(-2875,24,3326)),
-        Q(130,  "Vice Admiral",        "MarineQuest2",  2, "Marine Quest Giver",     Vector3.new(-2875,24,3326)),
-        -- SkyQuest
-        Q(150,  "Sky Bandit",          "SkyQuest",      1, "Sky Quest Giver",        Vector3.new(-4841,23,-846)),
-        Q(175,  "Dark Master",         "SkyQuest",      2, "Sky Quest Giver",        Vector3.new(-4841,23,-846)),
-        -- PrisonerQuest
-        Q(190,  "Prisoner",            "PrisonerQuest", 1, "Prisoner Quest Giver",   Vector3.new(4867,4,740)),
-        Q(210,  "Dangerous Prisoner",  "PrisonerQuest", 2, "Prisoner Quest Giver",   Vector3.new(4867,4,740)),
-        -- ImpelQuest
-        Q(225,  "Ruthless Prisoner",   "ImpelQuest",    1, "Impel Quest Giver",      Vector3.new(5226,10,995)),
-        Q(230,  "Warden",              "ImpelQuest",    2, "Impel Quest Giver",      Vector3.new(5226,10,995)),
-        -- ColosseumQuest
-        Q(250,  "Toga Warrior",        "ColosseumQuest",1, "Colosseum Quest Giver",  Vector3.new(-1540,8,151)),
-        Q(275,  "Gladiator",           "ColosseumQuest",2, "Colosseum Quest Giver",  Vector3.new(-1540,8,151)),
-        -- MagmaQuest
-        Q(300,  "Military Soldier",    "MagmaQuest",    1, "Magma Quest Giver",      Vector3.new(-5300,9,8500)),
-        Q(325,  "Military Spy",        "MagmaQuest",    2, "Magma Quest Giver",      Vector3.new(-5300,9,8500)),
-        Q(350,  "Magma Admiral",       "MagmaQuest",    3, "Magma Quest Giver",      Vector3.new(-5300,9,8500)),
-        -- FishmanQuest
-        Q(375,  "Fishman Warrior",     "FishmanQuest",  1, "Fishman Quest Giver",    Vector3.new(-3083,7,-9780)),
-        Q(400,  "Fishman Commando",    "FishmanQuest",  2, "Fishman Quest Giver",    Vector3.new(-3083,7,-9780)),
-        Q(425,  "Fishman Lord",        "FishmanQuest",  3, "Fishman Quest Giver",    Vector3.new(-3083,7,-9780)),
-        -- SkyExp1Quest
-        Q(450,  "God's Guard",         "SkyExp1Quest",  1, "SkyExp1 Quest Giver",    Vector3.new(-4841,23,-2450)),
-        Q(475,  "Shanda",              "SkyExp1Quest",  2, "SkyExp1 Quest Giver",    Vector3.new(-4841,23,-2450)),
-        Q(500,  "Wysper",              "SkyExp1Quest",  3, "SkyExp1 Quest Giver",    Vector3.new(-4841,23,-2450)),
-        -- SkyExp2Quest
-        Q(525,  "Royal Squad",         "SkyExp2Quest",  1, "SkyExp2 Quest Giver",    Vector3.new(-5020,27,-2270)),
-        Q(550,  "Royal Soldier",       "SkyExp2Quest",  2, "SkyExp2 Quest Giver",    Vector3.new(-5020,27,-2270)),
-        Q(575,  "Thunder God",         "SkyExp2Quest",  3, "SkyExp2 Quest Giver",    Vector3.new(-5020,27,-2270)),
-        -- FountainQuest
-        Q(625,  "Galley Pirate",       "FountainQuest", 1, "Fountain Quest Giver",   Vector3.new(5367,6,4050)),
-        Q(650,  "Galley Captain",      "FountainQuest", 2, "Fountain Quest Giver",   Vector3.new(5367,6,4050)),
-        Q(675,  "Cyborg",              "FountainQuest", 3, "Fountain Quest Giver",   Vector3.new(5367,6,4050)),
-        -- Area1Quest
-        Q(700,  "Raider",              "Area1Quest",    1, "Area1 Quest Giver",      Vector3.new(-1067,12,4414)),
-        Q(725,  "Mercenary",           "Area1Quest",    2, "Area1 Quest Giver",      Vector3.new(-1067,12,4414)),
-        Q(750,  "Diamond",             "Area1Quest",    3, "Area1 Quest Giver",      Vector3.new(-1067,12,4414)),
-        -- Area2Quest
-        Q(775,  "Swan Pirate",         "Area2Quest",    1, "Area2 Quest Giver",      Vector3.new(632,6,1014)),
-        Q(800,  "Factory Staff",       "Area2Quest",    2, "Area2 Quest Giver",      Vector3.new(632,6,1014)),
-        Q(850,  "Jeremy",              "Area2Quest",    3, "Area2 Quest Giver",      Vector3.new(632,6,1014)),
-        -- MarineQuest3
-        Q(875,  "Marine Lieutenant",   "MarineQuest3",  1, "Marine Quest 3 Giver",   Vector3.new(-2440,5,7398)),
-        Q(900,  "Marine Captain",      "MarineQuest3",  2, "Marine Quest 3 Giver",   Vector3.new(-2440,5,7398)),
-        Q(925,  "Orbitus",             "MarineQuest3",  3, "Marine Quest 3 Giver",   Vector3.new(-2440,5,7398)),
-        -- ZombieQuest
-        Q(950,  "Zombie",              "ZombieQuest",   1, "Zombie Quest Giver",     Vector3.new(-5494,64,330)),
-        Q(975,  "Vampire",             "ZombieQuest",   2, "Zombie Quest Giver",     Vector3.new(-5494,64,330)),
-        -- SnowMountainQuest
-        Q(1000, "Snow Trooper",        "SnowMountainQuest", 1, "SnowMountain Quest Giver", Vector3.new(610,3,-5251)),
-        Q(1050, "Winter Warrior",      "SnowMountainQuest", 2, "SnowMountain Quest Giver", Vector3.new(610,3,-5251)),
-        -- IceSideQuest
-        Q(1100, "Lab Subordinate",     "IceSideQuest",  1, "IceSide Quest Giver",    Vector3.new(-6066,15,-4905)),
-        Q(1125, "Horned Warrior",      "IceSideQuest",  2, "IceSide Quest Giver",    Vector3.new(-6066,15,-4905)),
-        Q(1150, "Smoke Admiral",       "IceSideQuest",  3, "IceSide Quest Giver",    Vector3.new(-6066,15,-4905)),
-        -- FireSideQuest
-        Q(1175, "Magma Ninja",         "FireSideQuest", 1, "FireSide Quest Giver",   Vector3.new(-5444,37,-5834)),
-        Q(1200, "Lava Pirate",         "FireSideQuest", 2, "FireSide Quest Giver",   Vector3.new(-5444,37,-5834)),
-        -- ShipQuest1
-        Q(1250, "Ship Deckhand",       "ShipQuest1",    1, "Ship Quest 1 Giver",     Vector3.new(1251,37,4082)),
-        Q(1275, "Ship Engineer",       "ShipQuest1",    2, "Ship Quest 1 Giver",     Vector3.new(1251,37,4082)),
-        -- ShipQuest2
-        Q(1300, "Ship Steward",        "ShipQuest2",    1, "Ship Quest 2 Giver",     Vector3.new(923,37,3288)),
-        Q(1325, "Ship Officer",        "ShipQuest2",    2, "Ship Quest 2 Giver",     Vector3.new(923,37,3288)),
-        -- FrostQuest
-        Q(1350, "Arctic Warrior",      "FrostQuest",    1, "Frost Quest Giver",      Vector3.new(5749,29,-6258)),
-        Q(1375, "Snow Lurker",         "FrostQuest",    2, "Frost Quest Giver",      Vector3.new(5749,29,-6258)),
-        Q(1400, "Awakened Ice Admiral","FrostQuest",    3, "Frost Quest Giver",      Vector3.new(5749,29,-6258)),
-        -- ForgottenQuest
-        Q(1425, "Sea Soldier",         "ForgottenQuest",1, "Forgotten Quest Giver",  Vector3.new(-3050,238,-10149)),
-        Q(1450, "Water Fighter",       "ForgottenQuest",2, "Forgotten Quest Giver",  Vector3.new(-3050,238,-10149)),
-        Q(1475, "Tide Keeper",         "ForgottenQuest",3, "Forgotten Quest Giver",  Vector3.new(-3050,238,-10149)),
-        -- PiratePortQuest
-        Q(1500, "Pirate Millionaire",  "PiratePortQuest", 1, "PiratePort Quest Giver", Vector3.new(-79,12,4075)),
-        Q(1525, "Pistol Billionaire",  "PiratePortQuest", 2, "PiratePort Quest Giver", Vector3.new(-79,12,4075)),
-        Q(1550, "Stone",               "PiratePortQuest", 3, "PiratePort Quest Giver", Vector3.new(-79,12,4075)),
-        -- DragonCrewQuest
-        Q(1575, "Dragon Crew Warrior", "DragonCrewQuest", 1, "DragonCrew Quest Giver", Vector3.new(6066,42,-2025)),
-        Q(1600, "Dragon Crew Archer",  "DragonCrewQuest", 2, "DragonCrew Quest Giver", Vector3.new(6066,42,-2025)),
-        -- VenomCrewQuest
-        Q(1625, "Hydra Enforcer",      "VenomCrewQuest", 1, "VenomCrew Quest Giver",  Vector3.new(5198,8,380)),
-        Q(1650, "Venomous Assailant",  "VenomCrewQuest", 2, "VenomCrew Quest Giver",  Vector3.new(5198,8,380)),
-        Q(1675, "Hydra Leader",        "VenomCrewQuest", 3, "VenomCrew Quest Giver",  Vector3.new(5198,8,380)),
-        -- MarineTreeIsland
-        Q(1700, "Marine Commodore",    "MarineTreeIsland", 1, "MarineTree Quest Giver", Vector3.new(2429,8,7868)),
-        Q(1725, "Marine Rear Admiral", "MarineTreeIsland", 2, "MarineTree Quest Giver", Vector3.new(2429,8,7868)),
-        Q(1750, "Kilo Admiral",        "MarineTreeIsland", 3, "MarineTree Quest Giver", Vector3.new(2429,8,7868)),
-        -- DeepForestIsland3
-        Q(1775, "Fishman Raider",      "DeepForestIsland3", 1, "DeepForest3 Quest Giver", Vector3.new(-10777,331,-8730)),
-        Q(1800, "Fishman Captain",     "DeepForestIsland3", 2, "DeepForest3 Quest Giver", Vector3.new(-10777,331,-8730)),
-        -- DeepForestIsland
-        Q(1825, "Forest Pirate",       "DeepForestIsland", 1, "DeepForest Quest Giver", Vector3.new(-13232,332,-7625)),
-        Q(1850, "Mythological Pirate", "DeepForestIsland", 2, "DeepForest Quest Giver", Vector3.new(-13232,332,-7625)),
-        Q(1875, "Captain Elephant",    "DeepForestIsland", 3, "DeepForest Quest Giver", Vector3.new(-13232,332,-7625)),
-        -- DeepForestIsland2
-        Q(1900, "Jungle Pirate",       "DeepForestIsland2", 1, "DeepForest2 Quest Giver", Vector3.new(-12680,390,-9902)),
-        Q(1925, "Musketeer Pirate",    "DeepForestIsland2", 2, "DeepForest2 Quest Giver", Vector3.new(-12680,390,-9902)),
-        Q(1950, "Beautiful Pirate",    "DeepForestIsland2", 3, "DeepForest2 Quest Giver", Vector3.new(-12680,390,-9902)),
-        -- HauntedQuest1
-        Q(1975, "Reborn Skeleton",     "HauntedQuest1", 1, "Haunted1 Quest Giver",   Vector3.new(-9515,142,6076)),
-        Q(2000, "Living Zombie",       "HauntedQuest1", 2, "Haunted1 Quest Giver",   Vector3.new(-9515,142,6076)),
-        -- HauntedQuest2
-        Q(2025, "Demonic Soul",        "HauntedQuest2", 1, "Haunted2 Quest Giver",   Vector3.new(-9515,142,6076)),
-        Q(2050, "Posessed Mummy",      "HauntedQuest2", 2, "Haunted2 Quest Giver",   Vector3.new(-9515,142,6076)),
-        -- NutsIslandQuest
-        Q(2075, "Peanut Scout",        "NutsIslandQuest", 1, "NutsIsland Quest Giver", Vector3.new(-2105,38,-10195)),
-        Q(2100, "Peanut President",    "NutsIslandQuest", 2, "NutsIsland Quest Giver", Vector3.new(-2105,38,-10195)),
-        -- IceCreamIslandQuest
-        Q(2125, "Ice Cream Chef",      "IceCreamIslandQuest", 1, "IceCream Quest Giver", Vector3.new(-821,65,-10965)),
-        Q(2150, "Ice Cream Commander", "IceCreamIslandQuest", 2, "IceCream Quest Giver", Vector3.new(-821,65,-10965)),
-        Q(2175, "Cake Queen",          "IceCreamIslandQuest", 3, "IceCream Quest Giver", Vector3.new(-821,65,-10965)),
-        -- CakeQuest1
-        Q(2200, "Cookie Crafter",      "CakeQuest1",    1, "Cake Quest 1 Giver",     Vector3.new(-2022,37,-12038)),
-        Q(2225, "Cake Guard",          "CakeQuest1",    2, "Cake Quest 1 Giver",     Vector3.new(-2022,37,-12038)),
-        -- CakeQuest2
-        Q(2250, "Baking Staff",        "CakeQuest2",    1, "Cake Quest 2 Giver",     Vector3.new(-1896,37,-12979)),
-        Q(2275, "Head Baker",          "CakeQuest2",    2, "Cake Quest 2 Giver",     Vector3.new(-1896,37,-12979)),
-        -- ChocQuest1
-        Q(2300, "Cocoa Warrior",       "ChocQuest1",    1, "Choc Quest 1 Giver",     Vector3.new(231,25,-12199)),
-        Q(2325, "Chocolate Bar Battler","ChocQuest1",   2, "Choc Quest 1 Giver",     Vector3.new(231,25,-12199)),
-        -- ChocQuest2
-        Q(2350, "Sweet Thief",         "ChocQuest2",    1, "Choc Quest 2 Giver",     Vector3.new(147,24,-12776)),
-        Q(2375, "Candy Rebel",         "ChocQuest2",    2, "Choc Quest 2 Giver",     Vector3.new(147,24,-12776)),
-        -- CandyQuest1
-        Q(2400, "Candy Pirate",        "CandyQuest1",   1, "Candy Quest Giver",      Vector3.new(-1429,16,-14446)),
-        Q(2425, "Snow Demon",          "CandyQuest1",   2, "Candy Quest Giver",      Vector3.new(-1429,16,-14446)),
-        -- TikiQuest1
-        Q(2450, "Isle Outlaw",         "TikiQuest1",    1, "Tiki Quest 1 Giver",     Vector3.new(-16573,55,-7936)),
-        Q(2475, "Island Boy",          "TikiQuest1",    2, "Tiki Quest 1 Giver",     Vector3.new(-16573,55,-7936)),
-        -- TikiQuest2
-        Q(2500, "Sun-kissed Warrior",  "TikiQuest2",    1, "Tiki Quest 2 Giver",     Vector3.new(-16576,56,-10350)),
-        Q(2525, "Isle Champion",       "TikiQuest2",    2, "Tiki Quest 2 Giver",     Vector3.new(-16576,56,-10350)),
-        -- TikiQuest3
-        Q(2550, "Serpent Hunter",      "TikiQuest3",    1, "Tiki Quest 3 Giver",     Vector3.new(-16086,60,-9218)),
-        Q(2575, "Skull Slayer",        "TikiQuest3",    2, "Tiki Quest 3 Giver",     Vector3.new(-16086,60,-9218)),
-        -- SubmergedQuest1
-        Q(2600, "Reef Bandit",         "SubmergedQuest1", 1, "Submerged1 Quest Giver", Vector3.new(-43098,11,-6329)),
-        Q(2625, "Coral Pirate",        "SubmergedQuest1", 2, "Submerged1 Quest Giver", Vector3.new(-43098,11,-6329)),
-        -- SubmergedQuest2
-        Q(2650, "Sea Chanter",         "SubmergedQuest2", 1, "Submerged2 Quest Giver", Vector3.new(-44046,34,-7552)),
-        Q(2675, "Ocean Prophet",       "SubmergedQuest2", 2, "Submerged2 Quest Giver", Vector3.new(-44046,34,-7552)),
-        -- SubmergedQuest3
-        Q(2675, "High Disciple",       "SubmergedQuest3", 1, "Submerged3 Quest Giver", Vector3.new(-47069,42,-7089)),
-        Q(2700, "Grand Devotee",       "SubmergedQuest3", 2, "Submerged3 Quest Giver", Vector3.new(-47069,42,-7089)),
+    --================================================--
+    -- DADOS: QUESTS (baseado em ReplicatedStorage.Quests)
+    --================================================--
+    local QUESTS = {}
+    -- G(quest, npc, pos, { {levelReq, mob}, ... })  -> index = ordem na lista
+    local function G(quest, npc, pos, entries)
+        for i, e in ipairs(entries) do
+            table.insert(QUESTS, { minLevel = e[1], mob = e[2], quest = quest, index = i, npc = npc, pos = pos })
+        end
+    end
+    local V = Vector3.new
+
+    G("BanditQuest1",   "Bandit Quest Giver",    V(1059,16,1547),    {{0,"Bandit"}})
+    G("JungleQuest",    "Jungle Quest Giver",    V(-1599,22,154),    {{10,"Monkey"},{15,"Gorilla"},{20,"The Gorilla King"}})
+    G("BuggyQuest1",    "Buggy Quest Giver",     V(-1140,15,3930),   {{30,"Pirate"},{40,"Brute"},{55,"Chef"}})
+    G("DesertQuest",    "Desert Quest Giver",    V(954,6,4070),      {{60,"Desert Bandit"},{75,"Desert Officer"}})
+    G("SnowQuest",      "Snow Quest Giver",      V(1047,21,-5430),   {{90,"Snow Bandit"},{100,"Snowman"},{105,"Yeti"}})
+    G("MarineQuest2",   "Marine Quest Giver",    V(-2875,24,3326),   {{120,"Chief Petty Officer"},{130,"Vice Admiral"}})
+    G("SkyQuest",       "Sky Quest Giver",       V(-4841,23,-846),   {{150,"Sky Bandit"},{175,"Dark Master"}})
+    G("PrisonerQuest",  "Prisoner Quest Giver",  V(4867,4,740),      {{190,"Prisoner"},{210,"Dangerous Prisoner"}})
+    G("ImpelQuest",     "Impel Quest Giver",     V(5226,10,995),     {{225,"Ruthless Prisoner"},{230,"Warden"}})
+    G("ColosseumQuest", "Colosseum Quest Giver", V(-1540,8,151),     {{250,"Toga Warrior"},{275,"Gladiator"}})
+    G("MagmaQuest",     "Magma Quest Giver",     V(-5300,9,8500),    {{300,"Military Soldier"},{325,"Military Spy"},{350,"Magma Admiral"}})
+    G("FishmanQuest",   "Fishman Quest Giver",   V(-3083,7,-9780),   {{375,"Fishman Warrior"},{400,"Fishman Commando"},{425,"Fishman Lord"}})
+    G("SkyExp1Quest",   "SkyExp1 Quest Giver",   V(-4841,23,-2450),  {{450,"God's Guard"},{475,"Shanda"},{500,"Wysper"}})
+    G("SkyExp2Quest",   "SkyExp2 Quest Giver",   V(-5020,27,-2270),  {{525,"Royal Squad"},{550,"Royal Soldier"},{575,"Thunder God"}})
+    G("FountainQuest",  "Fountain Quest Giver",  V(5367,6,4050),     {{625,"Galley Pirate"},{650,"Galley Captain"},{675,"Cyborg"}})
+    G("Area1Quest",     "Area1 Quest Giver",     V(-1067,12,4414),   {{700,"Raider"},{725,"Mercenary"},{750,"Diamond"}})
+    G("Area2Quest",     "Area2 Quest Giver",     V(632,6,1014),      {{775,"Swan Pirate"},{800,"Factory Staff"},{850,"Jeremy"}})
+    G("MarineQuest3",   "Marine Quest 3 Giver",  V(-2440,5,7398),    {{875,"Marine Lieutenant"},{900,"Marine Captain"},{925,"Orbitus"}})
+    G("ZombieQuest",    "Zombie Quest Giver",    V(-5494,64,330),    {{950,"Zombie"},{975,"Vampire"}})
+    G("SnowMountainQuest","SnowMountain Quest Giver",V(610,3,-5251), {{1000,"Snow Trooper"},{1050,"Winter Warrior"}})
+    G("IceSideQuest",   "IceSide Quest Giver",   V(-6066,15,-4905),  {{1100,"Lab Subordinate"},{1125,"Horned Warrior"},{1150,"Smoke Admiral"}})
+    G("FireSideQuest",  "FireSide Quest Giver",  V(-5444,37,-5834),  {{1175,"Magma Ninja"},{1200,"Lava Pirate"}})
+    G("ShipQuest1",     "Ship Quest 1 Giver",    V(1251,37,4082),    {{1250,"Ship Deckhand"},{1275,"Ship Engineer"}})
+    G("ShipQuest2",     "Ship Quest 2 Giver",    V(923,37,3288),     {{1300,"Ship Steward"},{1325,"Ship Officer"}})
+    G("FrostQuest",     "Frost Quest Giver",     V(5749,29,-6258),   {{1350,"Arctic Warrior"},{1375,"Snow Lurker"},{1400,"Awakened Ice Admiral"}})
+    G("ForgottenQuest", "Forgotten Quest Giver", V(-3050,238,-10149),{{1425,"Sea Soldier"},{1450,"Water Fighter"},{1475,"Tide Keeper"}})
+    G("PiratePortQuest","PiratePort Quest Giver",V(-79,12,4075),     {{1500,"Pirate Millionaire"},{1525,"Pistol Billionaire"},{1550,"Stone"}})
+    G("DragonCrewQuest","DragonCrew Quest Giver",V(6066,42,-2025),   {{1575,"Dragon Crew Warrior"},{1600,"Dragon Crew Archer"}})
+    G("VenomCrewQuest", "VenomCrew Quest Giver", V(5198,8,380),      {{1625,"Hydra Enforcer"},{1650,"Venomous Assailant"},{1675,"Hydra Leader"}})
+    G("MarineTreeIsland","MarineTree Quest Giver",V(2429,8,7868),    {{1700,"Marine Commodore"},{1725,"Marine Rear Admiral"},{1750,"Kilo Admiral"}})
+    G("DeepForestIsland3","DeepForest3 Quest Giver",V(-10777,331,-8730),{{1775,"Fishman Raider"},{1800,"Fishman Captain"}})
+    G("DeepForestIsland","DeepForest Quest Giver",V(-13232,332,-7625),{{1825,"Forest Pirate"},{1850,"Mythological Pirate"},{1875,"Captain Elephant"}})
+    G("DeepForestIsland2","DeepForest2 Quest Giver",V(-12680,390,-9902),{{1900,"Jungle Pirate"},{1925,"Musketeer Pirate"},{1950,"Beautiful Pirate"}})
+    G("HauntedQuest1",  "Haunted1 Quest Giver",  V(-9515,142,6076),  {{1975,"Reborn Skeleton"},{2000,"Living Zombie"}})
+    G("HauntedQuest2",  "Haunted2 Quest Giver",  V(-9515,142,6076),  {{2025,"Demonic Soul"},{2050,"Posessed Mummy"}})
+    G("NutsIslandQuest","NutsIsland Quest Giver",V(-2105,38,-10195), {{2075,"Peanut Scout"},{2100,"Peanut President"}})
+    G("IceCreamIslandQuest","IceCream Quest Giver",V(-821,65,-10965),{{2125,"Ice Cream Chef"},{2150,"Ice Cream Commander"},{2175,"Cake Queen"}})
+    G("CakeQuest1",     "Cake Quest 1 Giver",    V(-2022,37,-12038), {{2200,"Cookie Crafter"},{2225,"Cake Guard"}})
+    G("CakeQuest2",     "Cake Quest 2 Giver",    V(-1896,37,-12979), {{2250,"Baking Staff"},{2275,"Head Baker"}})
+    G("ChocQuest1",     "Choc Quest 1 Giver",    V(231,25,-12199),   {{2300,"Cocoa Warrior"},{2325,"Chocolate Bar Battler"}})
+    G("ChocQuest2",     "Choc Quest 2 Giver",    V(147,24,-12776),   {{2350,"Sweet Thief"},{2375,"Candy Rebel"}})
+    G("CandyQuest1",    "Candy Quest Giver",     V(-1429,16,-14446), {{2400,"Candy Pirate"},{2425,"Snow Demon"}})
+    G("TikiQuest1",     "Tiki Quest 1 Giver",    V(-16573,55,-7936), {{2450,"Isle Outlaw"},{2475,"Island Boy"}})
+    G("TikiQuest2",     "Tiki Quest 2 Giver",    V(-16576,56,-10350),{{2500,"Sun-kissed Warrior"},{2525,"Isle Champion"}})
+    G("TikiQuest3",     "Tiki Quest 3 Giver",    V(-16086,60,-9218), {{2550,"Serpent Hunter"},{2575,"Skull Slayer"}})
+    G("SubmergedQuest1","Submerged1 Quest Giver",V(-43098,11,-6329), {{2600,"Reef Bandit"},{2625,"Coral Pirate"}})
+    G("SubmergedQuest2","Submerged2 Quest Giver",V(-44046,34,-7552), {{2650,"Sea Chanter"},{2675,"Ocean Prophet"}})
+    G("SubmergedQuest3","Submerged3 Quest Giver",V(-47069,42,-7089), {{2675,"High Disciple"},{2700,"Grand Devotee"}})
+
+    -- bosses: ficam fora do modo automatico (tem respawn longo)
+    local BOSS_NAMES = {}
+    for _, n in ipairs({"chef","cyborg","fishman lord","greybeard","ice admiral","magma admiral","magma general",
+        "mob leader","mob boss","sky warlord","lightning god","yeti","vice admiral","saber expert","the gorilla king",
+        "bobby","the saw","warden","chief warden","swan","diamond","jeremy","fajita","don swan","smoke admiral",
+        "cursed captain","darkbeard","order","awakened ice admiral","tide keeper","wysper","thunder god","orbitus",
+        "stone","kilo admiral","hydra leader","captain elephant","cake queen"}) do
+        BOSS_NAMES[n] = true
+    end
+
+    -- nome na quest -> nome(s) que aparecem nos spawns/Enemies
+    local ALIASES = {
+        ["wysper"]        = { "sky warlord" },
+        ["thunder god"]   = { "lightning god" },
+        ["magma admiral"] = { "magma general" },
+        ["mob leader"]    = { "mob boss" },
+    }
+
+    -- pontos fixos de farm por mob
+    local FARM_SPOTS = {
+        ["snow bandit"] = { pos = V(1183.19, -0.07, -5374.92), water = true },
     }
 
     local BF = {
         Enabled = false, FarmThread = nil,
-        SelectedQuest = nil,
-        FreeMob = nil,
-        BossMob = nil,
+        SelectedQuest = nil, FreeMob = nil, BossMob = nil,
         FlyFarm = true, FlySpeed = 60, FastAttack = true, BringMobs = false,
         WeaponType = "Melee", Height = 4, WaterWalk = false,
         QuestCooldown = 0, LastNotify = 0,
@@ -217,41 +158,41 @@ return function(ctx)
         local ok, t = pcall(function() return LP.PlayerGui.Main.Quest.Container.QuestTitle.Title.Text end)
         return ok and t or nil
     end
-    -- Le a quest ativa direto do ReplicatedStorage.Quests (nome real do mob)
-    local function getActiveQuestMob()
-        local ok, name = pcall(function()
-            -- tenta via QuestsCompleted (client module)
-            local g = getgenv and getgenv() or _G
-            if g and g.__BFPremiumQuests then
-                -- ...
-            end
-            return nil
-        end)
-        return nil
-    end
+
+    -- compara o titulo da UI com o mob da quest (tolera plural e prefixos)
     local function questMatches(q)
         local t = getQT()
         if not t or t == "" then return true end
-        -- Quest title no Blox Fruits eh o campo "Name" da quest
-        -- (ex: "Bandits", "Monkeys", "Gorillas", "Snow Bandit", "Yeti"...)
-        -- Mobs como "The Gorilla King" -> Name = "Gorilla King", entao comparamos
-        -- por partes do nome.
-        local title = t:lower()
-        local mob = q.mob:lower()
-        -- tira prefixos "the ", "god's " etc para comparar
-        local function strip(s) return (s:gsub("^the ", ""):gsub("[^%a%d]", "")) end
-        title = strip(title); mob = strip(mob)
+        local function strip(s) return (s:lower():gsub("^the ", ""):gsub("[^%a%d]", "")) end
+        local title, mob = strip(t), strip(q.mob)
         if title == mob then return true end
-        -- match parcial: title "bandits" contem "bandit"
         local stem = mob:sub(1, math.max(3, #mob - 2))
         return title:find(stem, 1, true) ~= nil
     end
-    -- Pega a ultima quest cujo LevelReq <= lvl (mesma logica do jogo)
+
+    -- ultima quest NORMAL (sem boss) cujo LevelReq <= nivel
     local function pickQ(l)
         local best
-        for _, q in ipairs(QUESTS) do if l >= q.minLevel then best = q end end
+        for _, q in ipairs(QUESTS) do
+            if l >= q.minLevel and not BOSS_NAMES[q.mob:lower()] then best = q end
+        end
         return best
     end
+
+    -- posicao real do NPC (procura no workspace uma vez; senao usa a tabela)
+    local QuestPosCache = {}
+    local function questPos(q)
+        if QuestPosCache[q] then return QuestPosCache[q] end
+        local pos = q.pos
+        local ok, npc = pcall(function() return workspace:FindFirstChild(q.npc, true) end)
+        if ok and npc then
+            local ok2, cf = pcall(function() return npc:GetPivot() end)
+            if ok2 and cf and cf.Position.Magnitude > 20 then pos = cf.Position end
+        end
+        QuestPosCache[q] = pos
+        return pos
+    end
+
     local function sendQ(name, idx)
         local cf = getCommF(); if not cf then return false end
         return pcall(function() cf:InvokeServer("StartQuest", name, idx) end)
@@ -259,10 +200,6 @@ return function(ctx)
     local function abandonQ()
         local cf = getCommF(); if not cf then return end
         pcall(function() cf:InvokeServer("AbandonQuest") end)
-    end
-    local function getHRP()
-        local c = LP.Character
-        return c and c:FindFirstChild("HumanoidRootPart")
     end
     local function tp(pos)
         local h = getHRP()
@@ -274,10 +211,7 @@ return function(ctx)
         pcall(function() Library:Notify({Title = title, Message = msg, Type = kind or "info", Duration = dur or 1.5}) end)
     end
 
-    local FARM_SPOTS = {
-        ["snow bandit"] = { pos = Vector3.new(1183.19, -0.07, -5374.92), water = true },
-    }
-
+    -- WaterWalking: atributo do proprio jogo
     local function applyWater(on)
         local c = LP.Character
         local found = false
@@ -293,7 +227,7 @@ return function(ctx)
         if not found and c then pcall(function() c:SetAttribute("WaterWalking", on) end) end
     end
 
-    local RunService = game:GetService("RunService")
+    -- NOCLIP continuo (o jogo reativa a colisao todo frame)
     local NoclipSaved = {}
     local noclipConn
     local function startNoclip()
@@ -320,25 +254,10 @@ return function(ctx)
     end
 
     --================================================--
-    -- SPAWNS
+    -- SPAWNS (_WorldOrigin.EnemySpawns + ReplicatedStorage)
     --================================================--
-    local SpawnsByMob = {}
+    local SpawnsByMob = {}   -- ["bandit"] = { {pos, level, boss} }
     local SpawnNames = {}
-
-    local function parseName(name)
-        local mob, lv, rest = name:match("^(.-)%s*%[Lv%.%s*(%d+)%](.*)$")
-        if not mob then return nil end
-        return mob, tonumber(lv), (rest or ""):find("Boss") ~= nil
-    end
-
-    local BOSS_NAMES = {}
-    for _, n in ipairs({"chef","cyborg","fishman lord","greybeard","ice admiral","magma admiral","magma general",
-        "mob leader","mob boss","sky warlord","lightning god","yeti","vice admiral","saber expert","the gorilla king",
-        "bobby","the saw","warden","chief warden","swan","diamond","jeremy","fajita","don swan","smoke admiral",
-        "cursed captain","darkbeard","order","awakened ice admiral","tide keeper","wysper","thunder god","orbitus",
-        "stone","kilo admiral","hydra leader","captain elephant","beautiful pirate","cake queen","swan pirate"}) do
-        BOSS_NAMES[n] = true
-    end
     local JUNK = { part = true, humanoidrootpart = true, model = true }
 
     local function addSpawn(mob, lv, boss, pos)
@@ -350,7 +269,6 @@ return function(ctx)
         SpawnNames[k] = SpawnNames[k] or mob
         table.insert(SpawnsByMob[k], { pos = pos, level = lv or 0, boss = boss })
     end
-
     local function pivotPos(inst)
         local ok, cf = pcall(function() return inst:GetPivot() end)
         return ok and cf and cf.Position or nil
@@ -383,15 +301,27 @@ return function(ctx)
         return next(SpawnsByMob) ~= nil
     end
 
-    local function nearestSpawn(mobName, from)
-        local list = SpawnsByMob[mobName:lower()]
-        if not list then return nil end
-        local best, bestD
-        for _, sp in ipairs(list) do
-            local d = (sp.pos - from).Magnitude
-            if not bestD or d < bestD then best, bestD = sp, d end
+    -- spawns do mob (ou de um alias)
+    local function spawnsFor(mobName)
+        local l = SpawnsByMob[mobName:lower()]
+        if l and #l > 0 then return l end
+        for _, a in ipairs(ALIASES[mobName:lower()] or {}) do
+            local l2 = SpawnsByMob[a]
+            if l2 and #l2 > 0 then return l2 end
         end
-        return best
+        return nil
+    end
+
+    local SpawnIdx = {}
+    local function pickSpawn(mobName, ref)
+        local list = spawnsFor(mobName)
+        if not list then return nil end
+        local sorted = {}
+        for _, sp in ipairs(list) do table.insert(sorted, sp) end
+        table.sort(sorted, function(x, y) return (x.pos - ref).Magnitude < (y.pos - ref).Magnitude end)
+        local k = mobName:lower()
+        local i = ((SpawnIdx[k] or 0) % #sorted) + 1
+        return sorted[i], k
     end
 
     local function buildMobLists()
@@ -425,34 +355,27 @@ return function(ctx)
         return (b or n):lower()
     end
 
-    local function norm(s)
-        local b = parseName(s)
-        s = (b or s):lower()
-        return (s:gsub("[^%a%d]", ""))
-    end
-    local function stemOf(n)
-        n = n:gsub("ies$", "y"):gsub("men$", "man"):gsub("s$", "")
-        return n
-    end
-    local function getRoot(m)
-        local r = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
-        if not r then
-            local hum = m:FindFirstChildOfClass("Humanoid")
-            r = hum and hum.RootPart
-        end
-        return r
-    end
-
+    -- mob so conta se nao estiver "estacionado" (origem / longe de qualquer spawn)
     local function validPos(mobName, pos)
         if pos.Magnitude < 20 then return false end
         local me = getHRP()
         if me and (me.Position - pos).Magnitude < 300 then return true end
-        local list = SpawnsByMob[mobName:lower()]
-        if not list or #list == 0 then return true end
+        local list = spawnsFor(mobName)
+        if not list then return true end
         for _, sp in ipairs(list) do
             if (sp.pos - pos).Magnitude < 300 then return true end
         end
         return false
+    end
+
+    local function targetSets(mobName)
+        local nset, sset = {}, {}
+        local function add(n)
+            local x = norm(n); nset[x] = true; sset[stemOf(x)] = true
+        end
+        add(mobName)
+        for _, a in ipairs(ALIASES[mobName:lower()] or {}) do add(a) end
+        return nset, sset
     end
 
     local function getMobs(mobName)
@@ -460,17 +383,20 @@ return function(ctx)
         local enemies = workspace:FindFirstChild("Enemies")
         if not enemies or not mobName then return exact end
         local me = getHRP()
-        local tN = norm(mobName); local tS = stemOf(tN)
+        local nset, sset = targetSets(mobName)
         for _, m in ipairs(enemies:GetChildren()) do
             local hum = m:FindFirstChildOfClass("Humanoid")
             local root = getRoot(m)
             if hum and hum.Health > 0 and root and validPos(mobName, root.Position) then
                 local n = norm(m.Name); local s = stemOf(n)
-                if n == tN or s == tS then
+                if nset[n] or sset[s] then
                     table.insert(exact, m)
-                elseif #s >= 4 and #tS >= 4 and (s:find(tS, 1, true) or tS:find(s, 1, true))
-                    and me and (root.Position - me.Position).Magnitude < 250 then
-                    table.insert(fuzzy, m)
+                elseif #s >= 4 and me and (root.Position - me.Position).Magnitude < 250 then
+                    for st in pairs(sset) do
+                        if #st >= 4 and (s:find(st, 1, true) or st:find(s, 1, true)) then
+                            table.insert(fuzzy, m); break
+                        end
+                    end
                 end
             end
         end
@@ -493,20 +419,8 @@ return function(ctx)
         return best
     end
 
-    local SpawnIdx = {}
-    local function pickSpawn(mobName, ref)
-        local list = SpawnsByMob[mobName:lower()]
-        if not list or #list == 0 then return nil end
-        local sorted = {}
-        for _, sp in ipairs(list) do table.insert(sorted, sp) end
-        table.sort(sorted, function(x, y) return (x.pos - ref).Magnitude < (y.pos - ref).Magnitude end)
-        local k = mobName:lower()
-        local i = ((SpawnIdx[k] or 0) % #sorted) + 1
-        return sorted[i], k
-    end
-
     --================================================--
-    -- ARMA
+    -- ARMA / ATAQUE
     --================================================--
     local function findTool(tip)
         local c = LP.Character; if not c then return nil end
@@ -536,12 +450,15 @@ return function(ctx)
         end
         return t
     end
-    local VIM = game:GetService("VirtualInputManager")
+    -- clique real no centro da tela (o hub nao deve cobrir esse ponto)
     local function atk(t)
         if t then pcall(function() t:Activate() end) end
         local ok = pcall(function()
-            VIM:SendMouseButtonEvent(900, 500, 0, true, game, 1)
-            VIM:SendMouseButtonEvent(900, 500, 0, false, game, 1)
+            local cam = workspace.CurrentCamera
+            local vp = cam and cam.ViewportSize or Vector2.new(1800, 1000)
+            local cx, cy = vp.X * 0.5, vp.Y * 0.5
+            VIM:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+            VIM:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
         end)
         if not ok and mouse1click then pcall(mouse1click) end
     end
@@ -593,6 +510,7 @@ return function(ctx)
             end
         end)
 
+        -- limpeza sempre executa
         if hrp and hrp.Parent then hrp.AssemblyLinearVelocity = Vector3.zero end
         if h and h.Parent then h.PlatformStand = oPS; h.AutoRotate = oAR end
         restoreCollide(saved)
@@ -604,6 +522,11 @@ return function(ctx)
     local function goTo(pos, timeout)
         if BF.FlyFarm then return flyTo(pos, BF.FlySpeed, timeout or 20) end
         tp(pos); task.wait(0.3); return true
+    end
+
+    local function travelTimeout(from, to, cap)
+        local dist = (from - to).Magnitude
+        return math.clamp(dist / math.max(BF.FlySpeed, 20) + 5, 10, cap or 60)
     end
 
     --================================================--
@@ -618,6 +541,7 @@ return function(ctx)
         return q.mob, q
     end
 
+    -- garante a quest certa ativa. true = pode atacar
     local function ensureQuest(q)
         if hasQ() then
             if questMatches(q) then return true end
@@ -629,15 +553,14 @@ return function(ctx)
         if BF.QuestCooldown > os.clock() then return false end
         local h = getHRP(); if not h then return false end
 
-        if (h.Position - q.pos).Magnitude > 15 then
+        local qp = questPos(q)
+        if (h.Position - qp).Magnitude > 15 then
             notify("Auto Farm", "Indo ate "..q.npc)
-            local dist = (h.Position - (q.pos + Vector3.new(0,5,0))).Magnitude
-            local to = math.clamp(dist / math.max(BF.FlySpeed, 20) + 5, 10, 90)
-            goTo(q.pos + Vector3.new(0, 5, 0), to)
-
+            local dest = qp + Vector3.new(0, 5, 0)
+            goTo(dest, travelTimeout(h.Position, dest, 90))
             task.wait(0.15)
             h = getHRP()
-            if not h or (h.Position - q.pos).Magnitude > 25 then
+            if not h or (h.Position - qp).Magnitude > 25 then
                 BF.QuestCooldown = os.clock() + 0.3
                 return false
             end
@@ -661,6 +584,7 @@ return function(ctx)
         end
     end
 
+    -- fica acima do mob, olhando para ele, batendo ate morrer
     local function engage(mob, q)
         local ch, h = GetChar(LP)
         if not ch or not h then return end
@@ -697,13 +621,14 @@ return function(ctx)
         local mobs = getMobs(mobName)
 
         if #mobs == 0 then
-            -- 1) busca por inimigos em raios progressivos
-            for _, r in ipairs({100, 200, 400, 800}) do
+            -- 1) inimigo vivo por perto (raio curto se ha spawns; amplo se nao ha)
+            local radii = spawnsFor(mobName) and { 70 } or { 100, 200, 400, 800 }
+            for _, r in ipairs(radii) do
                 local near = nearestAnyEnemy(h.Position, r)
                 if near then return near end
             end
 
-            -- 2) tenta ir para um spawn conhecido
+            -- 2) spawn conhecido (do mais perto do NPC ao mais longe)
             local ref = fallbackPos or h.Position
             local sp, key = pickSpawn(mobName, ref)
             local dest
@@ -711,16 +636,12 @@ return function(ctx)
             if sp then
                 dest = sp.pos + Vector3.new(0, 10, 0)
             elseif fallbackPos then
-                -- 3) SEM spawns: orbita em volta do NPC
-                if not BF.OrbitStart or BF.OrbitStart == 0 then
+                -- 3) sem spawns: orbita em volta do NPC
+                if not BF.OrbitStart or BF.OrbitStart == 0
+                    or (BF.OrbitAnchor and (BF.OrbitAnchor - fallbackPos).Magnitude > 50) then
                     BF.OrbitStart = os.clock()
                     BF.OrbitAnchor = fallbackPos
                 end
-                if BF.OrbitAnchor and (BF.OrbitAnchor - fallbackPos).Magnitude > 50 then
-                    BF.OrbitStart = os.clock()
-                    BF.OrbitAnchor = fallbackPos
-                end
-
                 local elapsed = os.clock() - BF.OrbitStart
                 local angle = (elapsed * 0.9) % (math.pi * 2)
                 local radius = 100 + ((elapsed * 5) % 150)
@@ -730,11 +651,9 @@ return function(ctx)
             if dest then
                 if (h.Position - dest).Magnitude > 25 then
                     notify("Auto Farm", "Procurando "..mobName)
-                    local dist = (h.Position - dest).Magnitude
-                    local to = math.clamp(dist / math.max(BF.FlySpeed, 20) + 5, 10, 60)
-                    goTo(dest, to)
+                    goTo(dest, travelTimeout(h.Position, dest, 60))
                 else
-                    task.wait(0.8)
+                    task.wait(0.8) -- espera respawn e vai ao proximo spawn
                     if key then SpawnIdx[key] = (SpawnIdx[key] or 0) + 1 end
                 end
             end
@@ -754,9 +673,8 @@ return function(ctx)
         BF.OrbitAnchor = nil
 
         if (h.Position - mh.Position).Magnitude > 20 then
-            local dist = (h.Position - mh.Position).Magnitude
-            local to = math.clamp(dist / math.max(BF.FlySpeed, 20) + 5, 10, 60)
-            goTo(mh.Position + Vector3.new(0, BF.Height, 0), to)
+            local dest = mh.Position + Vector3.new(0, BF.Height, 0)
+            goTo(dest, travelTimeout(h.Position, dest, 60))
         end
         return mob
     end
@@ -769,6 +687,7 @@ return function(ctx)
 
         if q and not ensureQuest(q) then return end
 
+        -- ponto fixo (so quando nao ha mob vivo por perto)
         local spot = FARM_SPOTS[mobName:lower()]
         if spot then
             if spot.water then applyWater(true) end
@@ -780,7 +699,7 @@ return function(ctx)
             end
         end
 
-        local mob = huntMob(mobName, q and q.pos)
+        local mob = huntMob(mobName, q and questPos(q))
         if mob then engage(mob, q) end
     end
 
@@ -808,7 +727,7 @@ return function(ctx)
     local bfStatus = sFarm:AddLabel("Verificando...")
     task.spawn(function()
         task.wait(2)
-        bfStatus:Set(spawnsOk and "[OK] Blox Fruits + spawns carregados" or "[!] EnemySpawns nao encontrado (usando orbita no NPC)")
+        bfStatus:Set(spawnsOk and "[OK] Blox Fruits + spawns carregados" or "[!] Spawns nao encontrados (usando orbita no NPC)")
     end)
     local statusLbl = sFarm:AddLabel("Status: parado")
     local mobCountLbl = sFarm:AddLabel("Mobs: --")
@@ -880,10 +799,11 @@ return function(ctx)
     sFarm:AddButton({ Name="Atualizar Status", Callback=updStatus })
     sFarm:AddButton({ Name="Reescanear Spawns", Callback=function()
         local ok = scanSpawns()
-        Library:Notify({Title="Spawns", Message=ok and "Spawns atualizados (reabra o hub p/ atualizar listas)" or "Pasta nao encontrada (usara orbita no NPC)", Type=ok and "success" or "warn"})
+        Library:Notify({Title="Spawns", Message=ok and "Spawns atualizados (reabra o hub p/ atualizar listas)" or "Nao encontrados (usara orbita no NPC)", Type=ok and "success" or "warn"})
     end })
+
     sFarm:AddButton({ Name="Mobs sem quest (console)", Callback=function()
-        if not scanSpawns() then Library:Notify({Title="Debug", Message="Sem EnemySpawns", Type="warn"}); return end
+        if not scanSpawns() then Library:Notify({Title="Debug", Message="Sem spawns", Type="warn"}); return end
         local known = {}
         for _, q in ipairs(QUESTS) do known[q.mob:lower()] = true end
         print("=== MOBS SEM QUEST ===")
@@ -894,7 +814,7 @@ return function(ctx)
         end
         print("=== QUESTS SEM SPAWN ===")
         for _, q in ipairs(QUESTS) do
-            if not SpawnsByMob[q.mob:lower()] then print("  "..q.mob) end
+            if not spawnsFor(q.mob) then print("  "..q.mob) end
         end
         Library:Notify({Title="Debug", Message="Listado no F9", Type="success"})
     end })
@@ -904,18 +824,18 @@ return function(ctx)
         print("=== DEBUG ALVO ===")
         print("alvo:", mobName, "| normalizado:", mobName and norm(mobName))
         print("achados por nome:", mobName and #getMobs(mobName) or 0)
-        print("spawns na pasta:", mobName and SpawnsByMob[mobName:lower()] and #SpawnsByMob[mobName:lower()] or 0)
-        if q then
-            print("quest:", q.quest, "#"..q.index, "| npc:", q.npc, "| pos NPC:", tostring(q.pos))
-        end
-        print("hasQ:", hasQ(), "| QuestTitle:", getQT())
+        local sl = mobName and spawnsFor(mobName)
+        print("spawns:", sl and #sl or 0)
         local h = getHRP()
-        if h and q then
-            print(("distancia ate o NPC: %.0f studs"):format((h.Position - q.pos).Magnitude))
+        if q then
+            local qp = questPos(q)
+            print("quest:", q.quest, "#"..q.index, "| npc:", q.npc, "| pos NPC:", tostring(qp))
+            if h then print(("distancia ate o NPC: %.0f studs"):format((h.Position - qp).Magnitude)) end
         end
+        print("hasQ:", hasQ(), "| QuestTitle:", getQT(), "| questMatches:", q and questMatches(q))
         local enemies = workspace:FindFirstChild("Enemies")
         if enemies and mobName then
-            print("todos com esse nome (valido = perto de um spawn):")
+            print("todos com esse nome:")
             for _, m in ipairs(enemies:GetChildren()) do
                 local r = getRoot(m)
                 if r and norm(m.Name) == norm(mobName) then
@@ -936,10 +856,8 @@ return function(ctx)
         Library:Notify({Title="Debug", Message="Veja o F9", Type="success"})
     end })
 
-    -- NOVO: comparar quest ativa com a tabela real do jogo
     sFarm:AddButton({ Name="Debug quests do jogo (console)", Callback=function()
-        local RS = game:GetService("ReplicatedStorage")
-        local QuestsMod = RS:FindFirstChild("Quests")
+        local QuestsMod = game:GetService("ReplicatedStorage"):FindFirstChild("Quests")
         if not QuestsMod then Library:Notify({Title="Debug", Message="ReplicatedStorage.Quests nao encontrado", Type="warn"}); return end
         local ok, Quests = pcall(require, QuestsMod)
         if not ok then Library:Notify({Title="Debug", Message="Falha ao requerer Quests", Type="warn"}); return end
@@ -947,17 +865,15 @@ return function(ctx)
         local myLvl = getLvl() or 0
         for questName, entries in pairs(Quests) do
             for idx, e in ipairs(entries) do
-                local task = ""
-                for mob, n in pairs(e.Task or {}) do task = mob.." x"..n; break end
+                local taskTxt = ""
+                for mob, n in pairs(e.Task or {}) do taskTxt = mob.." x"..n; break end
                 local marker = ""
                 if e.LevelReq <= myLvl and (e.LevelReq + 25 > myLvl) then marker = "  <<< SUA FAIXA" end
-                print(("  %-24s #%d | Lv%-5d | %-28s | %s%s"):format(questName, idx, e.LevelReq, e.Name, task, marker))
+                print(("  %-24s #%d | Lv%-5d | %-28s | %s%s"):format(questName, idx, e.LevelReq, tostring(e.Name), taskTxt, marker))
             end
         end
-        local t = getQT()
         print("=== QUEST ATIVA ===")
-        print("  titulo na UI:", t)
-        print("  hasQ:", hasQ(), "| nivel:", myLvl)
+        print("  titulo na UI:", getQT(), "| hasQ:", hasQ(), "| nivel:", myLvl)
         Library:Notify({Title="Debug", Message="Veja o F9", Type="success"})
     end })
 
@@ -966,7 +882,7 @@ return function(ctx)
         local h = getHRP()
         if not mobName or not h then return end
         FARM_SPOTS[mobName:lower()] = { pos = h.Position, water = BF.WaterWalk }
-        print(("FARM_SPOTS[%q] = { pos = Vector3.new(%.2f, %.2f, %.2f), water = %s }"):format(
+        print(("FARM_SPOTS[%q] = { pos = V(%.2f, %.2f, %.2f), water = %s }"):format(
             mobName:lower(), h.Position.X, h.Position.Y, h.Position.Z, tostring(BF.WaterWalk)))
         Library:Notify({Title="Ponto salvo", Message=mobName.." (copie a linha do F9 p/ manter)", Type="success"})
     end })
@@ -991,7 +907,7 @@ return function(ctx)
     end })
     sManual:AddButton({ Name="Teleportar ate NPC", Callback=function()
         local q = BF.SelectedQuest or pickQ(getLvl() or 1)
-        if q then tp(q.pos); Library:Notify({Title="Teleport", Message="Indo", Type="info"}) end
+        if q then tp(questPos(q)); Library:Notify({Title="Teleport", Message="Indo", Type="info"}) end
     end })
     sManual:AddButton({ Name="Pegar Quest", Callback=function()
         local q = BF.SelectedQuest or pickQ(getLvl() or 1)
@@ -1001,11 +917,12 @@ return function(ctx)
     local sInfo = bfTab:AddSection("Info")
     local infoLbl = sInfo:AddLabel("Carregando...")
 
+    -- loop unico de UI
     local alive = true
     task.spawn(function()
         while alive do
             pcall(function()
-                local mobName, q = resolveTarget()
+                local mobName = resolveTarget()
                 local enemies = workspace:FindFirstChild("Enemies")
                 local count, matches = 0, 0
                 if enemies then
@@ -1034,10 +951,11 @@ return function(ctx)
         if BF.WaterWalk then applyWater(true) end
     end)
 
+    -- limpeza ao descarregar o hub
     return function()
         alive = false
+        BF.Enabled = false
         stopNoclip()
         pcall(function() waterConn:Disconnect() end)
-        BF.Enabled = false
     end
 end
