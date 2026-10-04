@@ -51,7 +51,7 @@ return function(ctx)
         FreeMob = nil,         -- farm sem quest (nome do mob)
         BossMob = nil,         -- farm de boss (nome do boss)
         FlyFarm = true, FlySpeed = 60, FastAttack = true, BringMobs = false,
-        WeaponType = "Melee",
+        WeaponType = "Melee", Height = 6,
         QuestCooldown = 0, LastNotify = 0,
     }
     local FlyFarmMoving = false
@@ -122,20 +122,51 @@ return function(ctx)
         return mob, tonumber(lv), (rest or ""):find("Boss") ~= nil
     end
 
+    local BOSS_NAMES = {}
+    for _, n in ipairs({"chef","cyborg","fishman lord","greybeard","ice admiral","magma admiral","magma general",
+        "mob leader","mob boss","sky warlord","lightning god","yeti","vice admiral","saber expert","the gorilla king",
+        "bobby","the saw","warden","chief warden","swan","diamond","jeremy","fajita","don swan","smoke admiral",
+        "cursed captain","darkbeard","order","awakened ice admiral","tide keeper"}) do BOSS_NAMES[n] = true end
+    local JUNK = { part = true, humanoidrootpart = true, model = true }
+
+    local function addSpawn(mob, lv, boss, pos)
+        local k = mob:lower()
+        SpawnsByMob[k] = SpawnsByMob[k] or {}
+        for _, sp in ipairs(SpawnsByMob[k]) do
+            if (sp.pos - pos).Magnitude < 5 then return end -- duplicado
+        end
+        SpawnNames[k] = SpawnNames[k] or mob
+        table.insert(SpawnsByMob[k], { pos = pos, level = lv or 0, boss = boss })
+    end
+
+    local function pivotPos(inst)
+        local ok, cf = pcall(function() return inst:GetPivot() end)
+        return ok and cf and cf.Position or nil
+    end
+
     local function scanSpawns()
         table.clear(SpawnsByMob); table.clear(SpawnNames)
+
+        -- 1) workspace._WorldOrigin.EnemySpawns (tem nivel e [Boss])
         local origin = workspace:FindFirstChild("_WorldOrigin")
         local folder = origin and origin:FindFirstChild("EnemySpawns")
-        if not folder then return false end
-        for _, s in ipairs(folder:GetChildren()) do
-            local mob, lv, boss = parseName(s.Name)
-            if mob then
-                local ok, cf = pcall(function() return s:GetPivot() end)
-                if ok and cf then
-                    local k = mob:lower()
-                    SpawnsByMob[k] = SpawnsByMob[k] or {}
-                    SpawnNames[k] = mob
-                    table.insert(SpawnsByMob[k], { pos = cf.Position, level = lv, boss = boss })
+        if folder then
+            for _, sp in ipairs(folder:GetChildren()) do
+                local mob, lv, boss = parseName(sp.Name)
+                local pos = mob and pivotPos(sp)
+                if pos then addSpawn(mob, lv, boss, pos) end
+            end
+        end
+
+        -- 2) ReplicatedStorage.FortBuilderReplicatedSpawnPositionsFolder (so o nome)
+        local rs = game:GetService("ReplicatedStorage"):FindFirstChild("FortBuilderReplicatedSpawnPositionsFolder")
+        if rs then
+            for _, sp in ipairs(rs:GetChildren()) do
+                local name = sp.Name
+                if not tonumber(name) and not JUNK[name:lower()] then
+                    local mob = parseName(name) or name
+                    local pos = pivotPos(sp)
+                    if pos then addSpawn(mob, nil, BOSS_NAMES[mob:lower()] == true, pos) end
                 end
             end
         end
@@ -167,11 +198,11 @@ return function(ctx)
         table.sort(normals, cmp); table.sort(bosses, cmp)
         local nOpts, bOpts, nMap, bMap = { "Nenhum" }, { "Nenhum" }, {}, {}
         for _, e in ipairs(normals) do
-            local lbl = e.name.." [Lv. "..e.level.."]"
+            local lbl = e.name..(e.level > 0 and (" [Lv. "..e.level.."]") or "")
             table.insert(nOpts, lbl); nMap[lbl] = e.name
         end
         for _, e in ipairs(bosses) do
-            local lbl = e.name.." [Lv. "..e.level.."]"
+            local lbl = e.name..(e.level > 0 and (" [Lv. "..e.level.."]") or "")
             table.insert(bOpts, lbl); bMap[lbl] = e.name
         end
         return nOpts, bOpts, nMap, bMap
@@ -207,10 +238,12 @@ return function(ctx)
     -- mobs "estacionados" (longe do spawn / na origem) nao contam
     local function validPos(mobName, pos)
         if pos.Magnitude < 20 then return false end
+        local me = getHRP()
+        if me and (me.Position - pos).Magnitude < 300 then return true end
         local list = SpawnsByMob[mobName:lower()]
         if not list or #list == 0 then return true end
         for _, sp in ipairs(list) do
-            if (sp.pos - pos).Magnitude < 250 then return true end
+            if (sp.pos - pos).Magnitude < 300 then return true end
         end
         return false
     end
@@ -421,7 +454,7 @@ return function(ctx)
                 if q and not hasQ() then break end
 
                 setNoCollide(ch, saved)
-                local above = mh.Position + Vector3.new(0, 8, 0)
+                local above = mh.Position + Vector3.new(0, BF.Height, 0)
                 hrp.CFrame = CFrame.new(above, mh.Position)
                 hrp.AssemblyLinearVelocity = Vector3.zero
                 if BF.BringMobs then bringNearby(mob.Name:match("^(.-)%s*%[") or mob.Name, mh.Position) end
@@ -475,7 +508,7 @@ return function(ctx)
         if not mh then return end
 
         if (h.Position - mh.Position).Magnitude > 20 then
-            goTo(mh.Position + Vector3.new(0, 8, 0), 15)
+            goTo(mh.Position + Vector3.new(0, BF.Height, 0), 15)
         end
         return mob
     end
@@ -546,6 +579,7 @@ return function(ctx)
     sFarm:AddToggle({ Name="Fly Farm", Default=true, Flag="FlyFarm", Callback=function(v) BF.FlyFarm = v end })
     sFarm:AddSlider({ Name="Velocidade Voo Farm", Min=20, Max=200, Default=60, Step=5, Suffix=" sp", Flag="FlyFarmSpeed", Callback=function(v) BF.FlySpeed = v end })
     sFarm:AddToggle({ Name="Fast Attack", Default=true, Flag="FastAttack", Callback=function(v) BF.FastAttack = v end })
+    sFarm:AddSlider({ Name="Altura sobre o mob", Min=2, Max=20, Default=6, Step=1, Suffix=" st", Flag="FarmHeight", Callback=function(v) BF.Height = v end })
     sFarm:AddToggle({ Name="Bring Mobs", Default=false, Flag="BringMobs", Callback=function(v) BF.BringMobs = v end })
     sFarm:AddDropdown({ Name="Arma", Options={"Melee","Sword","Blox Fruit","Gun"}, Default="Melee", Flag="WeaponType", Callback=function(v) BF.WeaponType = v or "Melee" end })
 
