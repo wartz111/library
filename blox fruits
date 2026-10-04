@@ -1,0 +1,337 @@
+--!nocheck
+--================================================--
+-- PREMIUM HUB v10.9 - BLOX FRUITS MODULE
+--================================================--
+return function(ctx)
+    local Library=ctx.Library; local CFG=ctx.CFG; local Window=ctx.Window
+    local LP=ctx.LP; local GetChar=ctx.GetChar; local getCommF=ctx.getCommF
+    local IS_BLOX_FRUITS=ctx.L.IS_BLOX_FRUITS
+    local SetFlyFarmStateMoving=ctx.SetFlyFarmStateMoving
+
+    if not IS_BLOX_FRUITS then return end
+
+    --================================================--
+    -- TABELAS DE DADOS
+    --================================================--
+    local QUESTS = {
+        {1,"Bandit","BanditQuest1",1,"Pirate Adventurer",Vector3.new(1059,16,1547)},
+        {10,"Monkey","JungleQuest",1,"Adventurer",Vector3.new(-1599,22,154)},
+        {15,"Gorilla","JungleQuest",2,"Adventurer",Vector3.new(-1599,22,154)},
+        {30,"Pirate","BuggyQuest1",1,"Pirate Adventurer",Vector3.new(-1140,15,3930)},
+        {40,"Brute","BuggyQuest1",2,"Pirate Adventurer",Vector3.new(-1140,15,3930)},
+        {60,"Desert Bandit","DesertQuest",1,"Desert Adventurer",Vector3.new(954,6,4070)},
+        {75,"Desert Officer","DesertQuest",2,"Desert Adventurer",Vector3.new(954,6,4070)},
+        {90,"Snow Bandit","SnowQuest",1,"Villager",Vector3.new(1047,21,-5430)},
+        {100,"Snowman","SnowQuest",2,"Villager",Vector3.new(1047,21,-5430)},
+        {120,"Chief Petty Officer","MarineQuest2",1,"Marine",Vector3.new(-2875,24,3326)},
+        {150,"Sky Bandit","SkyQuest",1,"Sky Adventurer",Vector3.new(-4841,23,-846)},
+        {175,"Dark Master","SkyQuest",2,"Sky Adventurer",Vector3.new(-4841,23,-846)},
+        {190,"Prisoner","PrisonerQuest",1,"Jail Keeper",Vector3.new(4867,4,740)},
+        {210,"Dangerous Prisoner","PrisonerQuest",2,"Jail Keeper",Vector3.new(4867,4,740)},
+        {250,"Toga Warrior","ColosseumQuest",1,"Colosseum Quest Giver",Vector3.new(-1540,8,151)},
+        {275,"Gladiator","ColosseumQuest",2,"Colosseum Quest Giver",Vector3.new(-1540,8,151)},
+        {300,"Military Soldier","MagmaQuest",1,"The Mayor",Vector3.new(-5300,9,8500)},
+        {325,"Military Spy","MagmaQuest",2,"The Mayor",Vector3.new(-5300,9,8500)},
+        {375,"Fishman Warrior","FishmanQuest",1,"King Neptune",Vector3.new(-3083,7,-9780)},
+        {400,"Fishman Commando","FishmanQuest",2,"King Neptune",Vector3.new(-3083,7,-9780)},
+        {450,"God's Guard","SkyExp1Quest",1,"Mole",Vector3.new(-4841,23,-2450)},
+        {475,"Shanda","SkyExp1Quest",2,"Mole",Vector3.new(-4841,23,-2450)},
+        {525,"Royal Squad","SkyExp2Quest",1,"Sky Quest Giver 2",Vector3.new(-5020,27,-2270)},
+        {550,"Royal Soldier","SkyExp2Quest",2,"Sky Quest Giver 2",Vector3.new(-5020,27,-2270)},
+        {625,"Galley Pirate","FountainQuest",1,"Freezeburg Quest Giver",Vector3.new(5367,6,4050)},
+        {650,"Galley Captain","FountainQuest",2,"Freezeburg Quest Giver",Vector3.new(5367,6,4050)},
+    }
+
+    local BF = { Enabled=false, SelectedQuest=nil, FarmThread=nil, BringMobs=false, FastAttack=true, FlyFarm=true, FlySpeed=60, QuestCooldown=0, LastAreaCheck=0 }
+    local FlyFarmMoving = false
+    SetFlyFarmStateMoving(function() return FlyFarmMoving end)
+
+    --================================================--
+    -- FUNÇÕES
+    --================================================--
+    local function getLvl()
+        local ok, l = pcall(function() return LP.Data.Level.Value end)
+        if ok and type(l)=="number" then return l end
+        return nil
+    end
+    local function hasQ()
+        local ok, v = pcall(function() return LP.PlayerGui.Main.Quest.Visible end)
+        return ok and v==true
+    end
+    local function getQT()
+        local ok, t = pcall(function() return LP.PlayerGui.Main.Quest.Container.QuestTitle.Title.Text end)
+        return ok and t or nil
+    end
+    local function pickQ(l)
+        local b; for _, q in ipairs(QUESTS) do if l>=q[1] then b=q end end; return b
+    end
+    local function sendQ(n,i)
+        local cf=getCommF(); if not cf then return false end
+        return pcall(function() cf:InvokeServer("StartQuest",n,i) end)
+    end
+    local function getHRP(p) p=p or LP; local c=p.Character; return c and c:FindFirstChild("HumanoidRootPart") end
+    local function tp(pos) local h=getHRP(); if h then h.CFrame=CFrame.new(pos+Vector3.new(0,3,0)) end end
+
+    local function getMobs(qname)
+        local list = {}
+        local enemies = workspace:FindFirstChild("Enemies")
+        if not enemies then return list end
+        local qL = qname and qname:lower()
+        for _, m in ipairs(enemies:GetChildren()) do
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 and qL and m.Name:lower() == qL then
+                table.insert(list, m)
+            end
+        end
+        return list
+    end
+    local function equip()
+        local c = LP.Character; if not c then return nil end
+        local t = c:FindFirstChildOfClass("Tool"); if t then return t end
+        for _, x in ipairs(LP.Backpack:GetChildren()) do if x:IsA("Tool") then x.Parent=c; return x end end
+        return nil
+    end
+    local function atk(t) if t then pcall(function() t:Activate() end) end end
+
+    local function flyTo(target, speed, timeout)
+        timeout = timeout or 15
+        local st = tick()
+        local ch, h, hrp = GetChar(LP)
+        if not hrp or not h then return false end
+        FlyFarmMoving = true
+        local oAR = h.AutoRotate; local oPS = h.PlatformStand
+        h.PlatformStand = true; h.AutoRotate = false
+        local sC = {}
+        for _, p in ipairs(ch:GetDescendants()) do
+            if p:IsA("BasePart") then sC[p]=p.CanCollide; p.CanCollide=false end
+        end
+        local ok2 = false
+        while BF.Enabled and (tick()-st)<timeout do
+            if not hrp or not hrp.Parent then break end
+            local mp = hrp.Position
+            local d = target - mp
+            local dist = d.Magnitude
+            if dist < 4 then ok2=true; break end
+            hrp.AssemblyLinearVelocity = d.Unit * speed
+            local fd = Vector3.new(d.X,0,d.Z)
+            if fd.Magnitude > 0.1 then hrp.CFrame = CFrame.new(mp, mp+fd.Unit) end
+            for _, p in ipairs(ch:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide=false end end
+            task.wait(0.03)
+        end
+        if hrp and hrp.Parent then hrp.AssemblyLinearVelocity = Vector3.zero end
+        h.PlatformStand = oPS; h.AutoRotate = oAR
+        if not CFG.Noclip then
+            for p, v in pairs(sC) do if p and p.Parent then pcall(function() p.CanCollide=v end) end end
+        end
+        FlyFarmMoving = false
+        return ok2
+    end
+
+    local function farmTick()
+        if not BF.Enabled then return end
+        local h = getHRP(); if not h then return end
+        local l = getLvl(); if not l then return end
+        local q = BF.SelectedQuest or pickQ(l)
+        if not q then return end
+
+        local npcPos = q[6] + Vector3.new(0, 5, 0)
+
+        if hasQ() then
+            local mobs = getMobs(q[2])
+            if #mobs == 0 then return end
+
+            local valid = {}
+            for _, mob in ipairs(mobs) do
+                local mh = mob:FindFirstChild("HumanoidRootPart")
+                local mhum = mob:FindFirstChildOfClass("Humanoid")
+                if mh and mhum and mhum.Health > 0 then
+                    if mh.Position.Magnitude < 5 then continue end
+                    local distToNpc = (mh.Position - npcPos).Magnitude
+                    if distToNpc < 400 then
+                        table.insert(valid, { mob=mob, mh=mh, dist=distToNpc })
+                    end
+                end
+            end
+
+            if #valid == 0 then
+                local distToNpc = (h.Position - npcPos).Magnitude
+                if distToNpc > 30 then
+                    if (tick() - BF.LastAreaCheck) > 2 then
+                        Library:Notify({Title="Auto Farm", Message="Indo para area de "..q[2], Type="info", Duration=1.5})
+                        BF.LastAreaCheck = tick()
+                    end
+                    flyTo(npcPos, BF.FlySpeed, 20)
+                end
+                return
+            end
+
+            table.sort(valid, function(a, b)
+                return (h.Position - a.mh.Position).Magnitude < (h.Position - b.mh.Position).Magnitude
+            end)
+            local target = valid[1]
+            local mh = target.mh
+            local closestDist = (h.Position - mh.Position).Magnitude
+
+            local t = equip()
+            if not t then return end
+
+            if closestDist > 6 then
+                local flyStart = tick()
+                while BF.Enabled and (tick()-flyStart)<6 do
+                    if not mh or not mh.Parent then break end
+                    local newDist = (h.Position - mh.Position).Magnitude
+                    if newDist < 5 then break end
+                    local dir = mh.Position - h.Position
+                    h.AssemblyLinearVelocity = dir.Unit * BF.FlySpeed
+                    local fd = Vector3.new(dir.X, 0, dir.Z)
+                    if fd.Magnitude > 0.1 then
+                        h.CFrame = CFrame.new(h.Position, h.Position + fd.Unit)
+                    end
+                    atk(t); task.wait(0.05)
+                    atk(t); task.wait(0.05)
+                end
+                h.AssemblyLinearVelocity = Vector3.zero
+            end
+
+            if (h.Position - mh.Position).Magnitude <= 8 then
+                pcall(function() h.CFrame = CFrame.new(mh.Position + Vector3.new(0, 3, 0)) end)
+            end
+
+            atk(t)
+            if BF.FastAttack then atk(t); task.wait(0.05); atk(t) end
+            task.wait(0.1)
+            return
+        end
+
+        if BF.QuestCooldown > tick() then return end
+        if (h.Position - npcPos).Magnitude > 15 then
+            if BF.FlyFarm then
+                Library:Notify({Title="Auto Farm", Message="Voando ate "..q[5], Type="info", Duration=1.2})
+                flyTo(npcPos, BF.FlySpeed, 20); task.wait(0.3)
+            else tp(q[6]); task.wait(0.3) end
+        end
+        sendQ(q[3], q[4]); task.wait(0.5)
+        BF.QuestCooldown = tick() + 0.8
+    end
+
+    local function startFarm()
+        if BF.FarmThread then return end
+        BF.FarmThread = task.spawn(function()
+            while BF.Enabled do pcall(farmTick); task.wait(0.15) end
+            BF.FarmThread = nil
+        end)
+    end
+
+    --================================================--
+    -- UI
+    --================================================--
+    local bfTab = Window:AddTab("Blox Fruits", "◇")
+    local sFarm = bfTab:AddSection("Auto Farm")
+    local bfStatus = sFarm:AddLabel("Verificando...")
+    task.spawn(function() task.wait(2); bfStatus:Set("[OK] Blox Fruits detectado") end)
+    local statusLbl = sFarm:AddLabel("Status: parado")
+    local function updStatus()
+        local l = getLvl() or 0
+        local q = BF.SelectedQuest or pickQ(l)
+        local qn = q and (q[2].." ("..q[3].." #"..q[4]..")") or "nenhuma"
+        if BF.Enabled then statusLbl:Set("FARMANDO - Nv "..l.." -> "..qn)
+        else statusLbl:Set("Parado") end
+    end
+    local mobCountLbl = sFarm:AddLabel("Mobs: --")
+    task.spawn(function()
+        while task.wait(1) do
+            local enemies = workspace:FindFirstChild("Enemies")
+            local count, matches = 0, 0
+            local l = getLvl() or 0
+            local q = BF.SelectedQuest or pickQ(l)
+            local mobName = q and q[2] or "?"
+            if enemies then
+                for _, m in ipairs(enemies:GetChildren()) do
+                    local hu = m:FindFirstChildOfClass("Humanoid")
+                    if hu and hu.Health>0 then
+                        count += 1
+                        if q and m.Name:lower()==q[2]:lower() then matches += 1 end
+                    end
+                end
+            end
+            mobCountLbl:Set("Mobs: "..count.." total | "..mobName..": "..matches)
+        end
+    end)
+
+    sFarm:AddToggle({ Name="Auto Farm", Default=false, Flag="AutoFarm", Callback=function(v)
+        BF.Enabled = v
+        if v then startFarm(); Library:Notify({Title="Auto Farm", Message="Iniciado", Type="success"})
+        else Library:Notify({Title="Auto Farm", Message="Parado", Type="warn"}) end
+        updStatus()
+    end })
+    sFarm:AddToggle({ Name="Fly Farm", Default=true, Flag="FlyFarm", Callback=function(v) BF.FlyFarm=v end })
+    sFarm:AddSlider({ Name="Velocidade Voo Farm", Min=20, Max=200, Default=60, Step=5, Suffix=" sp", Flag="FlyFarmSpeed", Callback=function(v) BF.FlySpeed=v end })
+    sFarm:AddToggle({ Name="Fast Attack", Default=true, Flag="FastAttack", Callback=function(v) BF.FastAttack=v end })
+    sFarm:AddToggle({ Name="ESP Enemies", Default=false, Flag="ESPEnemies", Callback=function(v)
+        if v then
+            task.spawn(function()
+                local dr = {}
+                while Library.Flags.ESPEnemies do
+                    local e = workspace:FindFirstChild("Enemies")
+                    if e then
+                        for _, m in ipairs(e:GetChildren()) do
+                            if m:FindFirstChild("HumanoidRootPart") and not dr[m] then
+                                local b = Drawing.new("Square")
+                                b.Thickness=1; b.Color=Color3.fromRGB(255,60,60); b.Filled=false; b.Visible=true
+                                dr[m]=b
+                            end
+                        end
+                    end
+                    for mob, b in pairs(dr) do
+                        if mob and mob.Parent and mob:FindFirstChild("HumanoidRootPart") then
+                            local p, on = ctx.Camera:WorldToViewportPoint(mob.HumanoidRootPart.Position)
+                            b.Position=Vector2.new(p.X-20,p.Y-40); b.Size=Vector2.new(40,80); b.Visible=on
+                        else b:Remove(); dr[mob]=nil end
+                    end
+                    task.wait(0.05)
+                end
+                for _, b in pairs(dr) do pcall(function() b:Remove() end) end
+            end)
+        end
+    end })
+    sFarm:AddButton({ Name="Atualizar Status", Callback=updStatus })
+    sFarm:AddButton({ Name="Listar Mobs no Console", Callback=function()
+        local enemies = workspace:FindFirstChild("Enemies")
+        if not enemies then Library:Notify({Title="Debug", Message="Sem Enemies", Type="warn"}); return end
+        local names = {}
+        for _, m in ipairs(enemies:GetChildren()) do
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health>0 then names[m.Name]=(names[m.Name] or 0)+1 end
+        end
+        print("=== MOBS ===")
+        for name, count in pairs(names) do print("  "..name.." x"..count) end
+        Library:Notify({Title="Debug", Message="Listado no F9", Type="success"})
+    end })
+
+    local sManual = bfTab:AddSection("Missao Manual")
+    local qOpts = { "Automatico" }
+    for _, q in ipairs(QUESTS) do table.insert(qOpts, q[2].." ("..q[3].." #"..q[4]..")") end
+    sManual:AddDropdown({ Name="Escolher Quest", Options=qOpts, Default="Automatico", Flag="ManualQuest", Callback=function(v)
+        if v=="Automatico" or not v then BF.SelectedQuest=nil
+        else for _, q in ipairs(QUESTS) do if (q[2].." ("..q[3].." #"..q[4]..")")==v then BF.SelectedQuest=q; break end end end
+        updStatus()
+    end })
+    sManual:AddButton({ Name="Teleportar ate NPC", Callback=function()
+        local l=getLvl() or 1; local q=BF.SelectedQuest or pickQ(l)
+        if q then tp(q[6]); Library:Notify({Title="Teleport", Message="Indo", Type="info"}) end
+    end })
+    sManual:AddButton({ Name="Pegar Quest", Callback=function()
+        local l=getLvl() or 1; local q=BF.SelectedQuest or pickQ(l)
+        if q then sendQ(q[3], q[4]); Library:Notify({Title="Quest", Message="Aceita", Type="success"}) end
+    end })
+
+    local sInfo = bfTab:AddSection("Info")
+    local infoLbl = sInfo:AddLabel("Carregando...")
+    task.spawn(function()
+        while task.wait(1) do
+            local l=getLvl() or "?"; local hq=hasQ(); local t=getQT()
+            pcall(function() infoLbl:Set("Nv: "..l.." | Quest: "..(hq and (t or "ativa") or "nenhuma")) end)
+            pcall(updStatus)
+        end
+    end)
+end
