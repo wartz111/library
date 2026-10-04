@@ -731,6 +731,7 @@ return function(ctx)
     end)
     local statusLbl = sFarm:AddLabel("Status: parado")
     local mobCountLbl = sFarm:AddLabel("Mobs: --")
+    local dbgLbl = sFarm:AddLabel("Debug: clique num botao de debug")
 
     local function currentModeText()
         if BF.BossMob then return "BOSS "..BF.BossMob end
@@ -802,79 +803,99 @@ return function(ctx)
         Library:Notify({Title="Spawns", Message=ok and "Spawns atualizados (reabra o hub p/ atualizar listas)" or "Nao encontrados (usara orbita no NPC)", Type=ok and "success" or "warn"})
     end })
 
-    sFarm:AddButton({ Name="Mobs sem quest (console)", Callback=function()
-        if not scanSpawns() then Library:Notify({Title="Debug", Message="Sem spawns", Type="warn"}); return end
+    -- saida de debug: F9 + console do executor + clipboard + label na UI
+    local function emit(lines)
+        local text = table.concat(lines, "\n")
+        for _, l in ipairs(lines) do print(l) end
+        pcall(function() rconsoleprint(text.."\n") end)
+        local copied = pcall(function() setclipboard(text) end)
+        local short = {}
+        for i = 1, math.min(#lines, 4) do short[i] = lines[i] end
+        pcall(function() dbgLbl:Set(table.concat(short, " | ")) end)
+        pcall(function()
+            Library:Notify({Title="Debug", Message = copied and "Copiado! Cole aqui no chat (Ctrl+V)" or "Resumo no label (F9/console pode nao mostrar)", Type="success", Duration=4})
+        end)
+    end
+
+    sFarm:AddButton({ Name="Debug: mobs sem quest", Callback=function()
+        local ok = scanSpawns()
+        local total = 0
+        for _ in pairs(SpawnsByMob) do total += 1 end
+        local L = { "spawns lidos: "..total.." mobs ("..(ok and "ok" or "NENHUM, pasta nao achada")..")" }
         local known = {}
         for _, q in ipairs(QUESTS) do known[q.mob:lower()] = true end
-        print("=== MOBS SEM QUEST ===")
+        table.insert(L, "=== MOBS SEM QUEST ===")
         for k, list in pairs(SpawnsByMob) do
             if not known[k] then
-                print(("  %s | Lv %d | %s | %d spawns"):format(SpawnNames[k], list[1].level, list[1].boss and "BOSS" or "normal", #list))
+                table.insert(L, ("  %s | Lv %d | %s | %d spawns"):format(SpawnNames[k], list[1].level, list[1].boss and "BOSS" or "normal", #list))
             end
         end
-        print("=== QUESTS SEM SPAWN ===")
+        table.insert(L, "=== QUESTS SEM SPAWN ===")
         for _, q in ipairs(QUESTS) do
-            if not spawnsFor(q.mob) then print("  "..q.mob) end
+            if not spawnsFor(q.mob) then table.insert(L, "  "..q.mob) end
         end
-        Library:Notify({Title="Debug", Message="Listado no F9", Type="success"})
+        emit(L)
     end })
 
-    sFarm:AddButton({ Name="Debug alvo atual (console)", Callback=function()
+    sFarm:AddButton({ Name="Debug: alvo atual", Callback=function()
         local mobName, q = resolveTarget()
-        print("=== DEBUG ALVO ===")
-        print("alvo:", mobName, "| normalizado:", mobName and norm(mobName))
-        print("achados por nome:", mobName and #getMobs(mobName) or 0)
-        local sl = mobName and spawnsFor(mobName)
-        print("spawns:", sl and #sl or 0)
         local h = getHRP()
+        local sl = mobName and spawnsFor(mobName)
+        local L = {
+            "alvo: "..tostring(mobName).." | achados: "..(mobName and #getMobs(mobName) or 0).." | spawns: "..(sl and #sl or 0),
+            "hasQ: "..tostring(hasQ()).." | titulo: "..tostring(getQT()).." | match: "..tostring(q and questMatches(q)),
+        }
         if q then
             local qp = questPos(q)
-            print("quest:", q.quest, "#"..q.index, "| npc:", q.npc, "| pos NPC:", tostring(qp))
-            if h then print(("distancia ate o NPC: %.0f studs"):format((h.Position - qp).Magnitude)) end
+            table.insert(L, "quest: "..q.quest.." #"..q.index.." | npc: "..q.npc.." | pos NPC: "..tostring(qp))
+            if h then table.insert(L, ("distancia ate o NPC: %.0f studs"):format((h.Position - qp).Magnitude)) end
         end
-        print("hasQ:", hasQ(), "| QuestTitle:", getQT(), "| questMatches:", q and questMatches(q))
         local enemies = workspace:FindFirstChild("Enemies")
         if enemies and mobName then
-            print("todos com esse nome:")
+            table.insert(L, "todos com esse nome:")
             for _, m in ipairs(enemies:GetChildren()) do
                 local r = getRoot(m)
                 if r and norm(m.Name) == norm(mobName) then
-                    print(("  %s pos=%s valido=%s"):format(m.Name, tostring(r.Position), tostring(validPos(mobName, r.Position))))
+                    table.insert(L, ("  %s pos=%s valido=%s"):format(m.Name, tostring(r.Position), tostring(validPos(mobName, r.Position))))
                 end
             end
         end
         if enemies and h then
-            print("inimigos vivos num raio de 300:")
+            table.insert(L, "inimigos vivos num raio de 300:")
             for _, m in ipairs(enemies:GetChildren()) do
                 local r = getRoot(m)
                 local hu = m:FindFirstChildOfClass("Humanoid")
                 if r and hu and hu.Health > 0 and (r.Position - h.Position).Magnitude < 300 then
-                    print(("  '%s' -> '%s' (%.0f studs)"):format(m.Name, norm(m.Name), (r.Position - h.Position).Magnitude))
+                    table.insert(L, ("  '%s' (%.0f studs)"):format(m.Name, (r.Position - h.Position).Magnitude))
                 end
             end
         end
-        Library:Notify({Title="Debug", Message="Veja o F9", Type="success"})
+        emit(L)
     end })
 
-    sFarm:AddButton({ Name="Debug quests do jogo (console)", Callback=function()
-        local QuestsMod = game:GetService("ReplicatedStorage"):FindFirstChild("Quests")
-        if not QuestsMod then Library:Notify({Title="Debug", Message="ReplicatedStorage.Quests nao encontrado", Type="warn"}); return end
-        local ok, Quests = pcall(require, QuestsMod)
-        if not ok then Library:Notify({Title="Debug", Message="Falha ao requerer Quests", Type="warn"}); return end
-        print("=== QUESTS REAIS DO JOGO ===")
+    sFarm:AddButton({ Name="Debug: quests do jogo", Callback=function()
         local myLvl = getLvl() or 0
+        local L = { "nivel: "..myLvl.." | hasQ: "..tostring(hasQ()).." | titulo: "..tostring(getQT()) }
+        local QuestsMod = game:GetService("ReplicatedStorage"):FindFirstChild("Quests")
+        if not QuestsMod then
+            table.insert(L, "ReplicatedStorage.Quests nao encontrado")
+            return emit(L)
+        end
+        local ok, Quests = pcall(require, QuestsMod)
+        if not ok then
+            table.insert(L, "Falha ao requerer Quests: "..tostring(Quests))
+            return emit(L)
+        end
+        table.insert(L, "=== QUESTS REAIS DO JOGO ===")
         for questName, entries in pairs(Quests) do
             for idx, e in ipairs(entries) do
                 local taskTxt = ""
                 for mob, n in pairs(e.Task or {}) do taskTxt = mob.." x"..n; break end
-                local marker = ""
-                if e.LevelReq <= myLvl and (e.LevelReq + 25 > myLvl) then marker = "  <<< SUA FAIXA" end
-                print(("  %-24s #%d | Lv%-5d | %-28s | %s%s"):format(questName, idx, e.LevelReq, tostring(e.Name), taskTxt, marker))
+                local marker = (e.LevelReq <= myLvl and e.LevelReq + 25 > myLvl) and "  <<< SUA FAIXA" or ""
+                table.insert(L, ("  %s #%d | Lv%d | %s | %s%s"):format(questName, idx, e.LevelReq, tostring(e.Name), taskTxt, marker))
             end
         end
-        print("=== QUEST ATIVA ===")
-        print("  titulo na UI:", getQT(), "| hasQ:", hasQ(), "| nivel:", myLvl)
-        Library:Notify({Title="Debug", Message="Veja o F9", Type="success"})
+        emit(L)
     end })
 
     sFarm:AddButton({ Name="Salvar minha posicao como ponto do mob", Callback=function()
