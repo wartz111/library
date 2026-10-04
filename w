@@ -972,45 +972,15 @@ local function getMM2List()
 end
 
 --================================================--
--- HOOKS
+-- HOOKS (desativados)
+-- Os hooks de __namecall e __index foram removidos.
+-- As tabelas abaixo continuam existindo porque o
+-- return do módulo e o main.lua referenciam elas.
 --================================================--
 local FlyState = { Active = false }
 local flying = false
-if getrawmetatable and setreadonly then
-    local mt = getrawmetatable(game)
-    if mt then
-        local old = mt.__namecall
-        pcall(function()
-            setreadonly(mt, false)
-            mt.__namecall = newcclosure(function(self, ...)
-                local m = getnamecallmethod()
-                if FlyState.Active and m == "FireServer" then
-                    if self.Name == "SetInAir" or self.Name == "Jump" then return nil end
-                end
-                return old(self, ...)
-            end)
-            setreadonly(mt, true)
-        end)
-    end
-end
 
 local SilentAim = { Enabled = false, Target = nil, Part = "Head" }
-if hookmetamethod then
-    local oldI
-    pcall(function()
-        oldI = hookmetamethod(game, "__index", function(self, k)
-            if SilentAim.Enabled and SilentAim.Target then
-                local ch = SilentAim.Target.Character
-                local p = ch and ch:FindFirstChild(SilentAim.Part)
-                if p then
-                    if k == "Hit" then return CFrame.new(p.Position)
-                    elseif k == "Target" then return p end
-                end
-            end
-            return oldI(self, k)
-        end)
-    end)
-end
 
 --================================================--
 -- THIRD PERSON
