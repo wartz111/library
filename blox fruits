@@ -176,25 +176,9 @@ return function(ctx)
         return t and t[q.index]
     end
 
-    -- compara o titulo da UI com os nomes da quest (nome do mob, Name da UI e Task)
+    -- SUBSTITUIDO: Retorna sempre verdadeiro para ignorar o idioma do jogo
     local function questMatches(q)
-        local t = getQT()
-        if not t or t == "" then return true end
-        local function strip(s) return (s:lower():gsub("^the ", ""):gsub("[^%a%d]", "")) end
-        local title = strip(t)
-        local names = { q.mob }
-        local e = getQuestEntry(q)
-        if e then
-            if e.Name then table.insert(names, tostring(e.Name)) end
-            if e.ShortName then table.insert(names, tostring(e.ShortName)) end
-            for mob in pairs(e.Task or {}) do table.insert(names, tostring(mob)) end
-        end
-        for _, nm in ipairs(names) do
-            local st = strip(nm)
-            st = st:sub(1, math.max(3, #st - 2))
-            if title:find(st, 1, true) then return true end
-        end
-        return false
+        return true
     end
 
     -- ultima quest NORMAL (sem boss) cujo LevelReq <= nivel
@@ -711,7 +695,8 @@ return function(ctx)
         pcall(function()
             local t0 = os.clock()
             local nextAtk = 0
-            while BF.Enabled and os.clock() - t0 < 12 do
+            -- SUBSTITUIDO: Tempo limite de combate alterado para 40 segundos
+            while BF.Enabled and os.clock() - t0 < 40 do
                 local mh = getRoot(mob)
                 local mhum = mob:FindFirstChildOfClass("Humanoid")
                 if not mob.Parent or not mh or not mhum or mhum.Health <= 0 then break end
@@ -777,7 +762,8 @@ return function(ctx)
                     notify("Auto Farm", "Procurando "..mobName)
                     goTo(dest, travelTimeout(h.Position, dest, 60))
                 else
-                    task.wait(0.8) -- espera respawn e vai ao proximo spawn
+                    -- SUBSTITUIDO: Aumentado para 15 segundos para aguardar o respawn
+                    task.wait(15)
                     if key then SpawnIdx[key] = (SpawnIdx[key] or 0) + 1 end
                 end
             end
