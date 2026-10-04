@@ -136,6 +136,7 @@ return function(ctx)
         WeaponType = "Melee", Height = 4, WaterWalk = false,
         QuestCooldown = 0, LastNotify = 0,
         OrbitStart = 0, OrbitAnchor = nil,
+        Blocked = {}, LastQuestRes = nil,
     }
     local FlyFarmMoving = false
     SetFlyFarmStateMoving(function() return FlyFarmMoving end)
@@ -183,6 +184,7 @@ return function(ctx)
         local e = getQuestEntry(q)
         if e then
             if e.Name then table.insert(names, tostring(e.Name)) end
+            if e.ShortName then table.insert(names, tostring(e.ShortName)) end
             for mob in pairs(e.Task or {}) do table.insert(names, tostring(mob)) end
         end
         for _, nm in ipairs(names) do
@@ -616,12 +618,18 @@ return function(ctx)
 
     -- garante a quest certa ativa. true = pode atacar
     local function ensureQuest(q)
+        local key = q.quest .. "#" .. q.index
         if hasQ() then
             if questMatches(q) then return true end
             if BF.QuestCooldown > os.clock() then return false end
             abandonQ()
             BF.QuestCooldown = os.clock() + 1.5
             return false
+        end
+        -- quest bloqueada pelo servidor (nivel baixo / ja concluida)
+        local need = BF.Blocked[key]
+        if need then
+            if (getLvl() or 0) >= need then BF.Blocked[key] = nil else return "noquest" end
         end
         if (BF.QuestFails or 0) >= 3 then
             if os.clock() - (BF.QuestFailAt or 0) < 30 then return "noquest" end
@@ -643,15 +651,37 @@ return function(ctx)
             end
         end
 
+        -- StartQuest devolve: 0 = aceita | 1 = erro | 2 = ja concluida | N>2 = nivel exigido
         local okQ, res = sendQ(q.quest, q.index)
-        task.wait(0.5)
+        BF.LastQuestRes = tostring(okQ) .. " / " .. tostring(res)
+        task.wait(0.6)
         BF.QuestCooldown = os.clock() + 0.8
-        if hasQ() then BF.QuestFails = 0; return true end
+
+        if okQ and res == 0 then
+            for _ = 1, 6 do
+                if hasQ() then break end
+                task.wait(0.25)
+            end
+            BF.QuestFails = 0
+            return hasQ()
+        end
+        if okQ and res == 2 then
+            BF.Blocked[key] = math.huge
+            reportBug("quest ja concluida (codigo 2)", key .. " | nivel " .. tostring(getLvl()))
+            return "noquest"
+        end
+        if okQ and type(res) == "number" and res > 2 then
+            BF.Blocked[key] = res
+            notify("Auto Farm", "Quest pede nivel " .. res .. ": farmando sem quest")
+            return "noquest"
+        end
+
+        -- codigo 1 ou resposta inesperada
         BF.QuestFails = (BF.QuestFails or 0) + 1
         if BF.QuestFails >= 3 then
             BF.QuestFailAt = os.clock()
-            reportBug("StartQuest nao ativou a quest",
-                ("%s #%d | ok=%s res=%s | dist NPC=%.0f"):format(q.quest, q.index, tostring(okQ), tostring(res),
+            reportBug("StartQuest falhou",
+                ("%s | ok=%s codigo=%s | dist NPC=%.0f"):format(key, tostring(okQ), tostring(res),
                     (getHRP() and (getHRP().Position - qp).Magnitude) or -1))
             return "noquest"
         end
@@ -778,6 +808,7 @@ return function(ctx)
             ("achados=%d spawns=%d fly=%s pos=%s"):format(mobName and #getMobs(mobName) or 0, sl and #sl or 0,
                 tostring(BF.FlyFarm), h and tostring(h.Position) or "sem personagem"),
         }
+        table.insert(L, "ultimo StartQuest (ok / codigo): " .. tostring(BF.LastQuestRes))
         local enemies = workspace:FindFirstChild("Enemies")
         if enemies and h then
             local n = 0
