@@ -51,7 +51,7 @@ return function(ctx)
         FreeMob = nil,         -- farm sem quest (nome do mob)
         BossMob = nil,         -- farm de boss (nome do boss)
         FlyFarm = true, FlySpeed = 60, FastAttack = true, BringMobs = false,
-        WeaponType = "Melee", Height = 6,
+        WeaponType = "Melee", Height = 6, WaterWalk = false,
         QuestCooldown = 0, LastNotify = 0,
     }
     local FlyFarmMoving = false
@@ -108,6 +108,27 @@ return function(ctx)
         if os.clock() - BF.LastNotify < 1.5 then return end
         BF.LastNotify = os.clock()
         pcall(function() Library:Notify({Title = title, Message = msg, Type = kind or "info", Duration = dur or 1.5}) end)
+    end
+
+    -- pontos fixos de farm por mob (centro da area onde eles ficam)
+    local FARM_SPOTS = {
+        ["snow bandit"] = { pos = Vector3.new(1183.19, -0.07, -5374.92), water = true },
+    }
+
+    -- WaterWalking: atributo do proprio jogo (aparece em Attributes do personagem)
+    local function applyWater(on)
+        local c = LP.Character
+        local found = false
+        for _, inst in ipairs({ c, LP }) do
+            if inst then
+                local ok, v = pcall(function() return inst:GetAttribute("WaterWalking") end)
+                if ok and v ~= nil then
+                    found = true
+                    if v ~= on then pcall(function() inst:SetAttribute("WaterWalking", on) end) end
+                end
+            end
+        end
+        if not found and c then pcall(function() c:SetAttribute("WaterWalking", on) end) end
     end
 
     --================================================--
@@ -521,6 +542,17 @@ return function(ctx)
 
         if q and not ensureQuest(q) then return end
 
+        local spot = FARM_SPOTS[mobName:lower()]
+        if spot then
+            if spot.water then applyWater(true) end
+            local hrp = getHRP()
+            if hrp and (hrp.Position - spot.pos).Magnitude > 150 then
+                notify("Auto Farm", "Indo ao ponto de "..mobName)
+                goTo(spot.pos + Vector3.new(0, 5, 0), 25)
+                return
+            end
+        end
+
         local mob = huntMob(mobName, q and q.pos)
         if mob then engage(mob, q) end
     end
@@ -580,6 +612,10 @@ return function(ctx)
     sFarm:AddSlider({ Name="Velocidade Voo Farm", Min=20, Max=200, Default=60, Step=5, Suffix=" sp", Flag="FlyFarmSpeed", Callback=function(v) BF.FlySpeed = v end })
     sFarm:AddToggle({ Name="Fast Attack", Default=true, Flag="FastAttack", Callback=function(v) BF.FastAttack = v end })
     sFarm:AddSlider({ Name="Altura sobre o mob", Min=2, Max=20, Default=6, Step=1, Suffix=" st", Flag="FarmHeight", Callback=function(v) BF.Height = v end })
+    sFarm:AddToggle({ Name="Andar na Agua", Default=false, Flag="WaterWalk", Callback=function(v)
+        BF.WaterWalk = v
+        applyWater(v)
+    end })
     sFarm:AddToggle({ Name="Bring Mobs", Default=false, Flag="BringMobs", Callback=function(v) BF.BringMobs = v end })
     sFarm:AddDropdown({ Name="Arma", Options={"Melee","Sword","Blox Fruit","Gun"}, Default="Melee", Flag="WeaponType", Callback=function(v) BF.WeaponType = v or "Melee" end })
 
@@ -664,6 +700,16 @@ return function(ctx)
         Library:Notify({Title="Debug", Message="Veja o F9", Type="success"})
     end })
 
+    sFarm:AddButton({ Name="Salvar minha posicao como ponto do mob", Callback=function()
+        local mobName = resolveTarget()
+        local h = getHRP()
+        if not mobName or not h then return end
+        FARM_SPOTS[mobName:lower()] = { pos = h.Position, water = BF.WaterWalk }
+        print(("FARM_SPOTS[%q] = { pos = Vector3.new(%.2f, %.2f, %.2f), water = %s }"):format(
+            mobName:lower(), h.Position.X, h.Position.Y, h.Position.Z, tostring(BF.WaterWalk)))
+        Library:Notify({Title="Ponto salvo", Message=mobName.." (copie a linha do F9 p/ manter)", Type="success"})
+    end })
+
     local sManual = bfTab:AddSection("Modo de Farm")
     local qOpts = { "Automatico" }
     for _, q in ipairs(QUESTS) do table.insert(qOpts, questLabel(q)) end
@@ -717,14 +763,21 @@ return function(ctx)
                 local t = getQT()
                 infoLbl:Set("Nv: "..l.." | Quest: "..(hasQ() and (t or "ativa") or "nenhuma"))
                 updStatus()
+                if BF.WaterWalk then applyWater(true) end
             end)
             task.wait(1)
         end
     end)
 
+    local waterConn = LP.CharacterAdded:Connect(function()
+        task.wait(1.5)
+        if BF.WaterWalk then applyWater(true) end
+    end)
+
     -- permite parar tudo ao descarregar o hub
     return function()
         alive = false
+        pcall(function() waterConn:Disconnect() end)
         BF.Enabled = false
     end
 end
