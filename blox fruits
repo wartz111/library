@@ -211,6 +211,38 @@ return function(ctx)
         pcall(function() Library:Notify({Title = title, Message = msg, Type = kind or "info", Duration = dur or 1.5}) end)
     end
 
+    -- WEBHOOK de bugs (Discord). Troque a URL aqui; deixe "" para desligar.
+    local WEBHOOK_URL = "https://discord.com/api/webhooks/1556029256541147246/06J5bmMO1eOl2qvE35xoNX5wozswqKIi7QUs0kdmfbv58UFvf3JLsvE34tiF9dYsJzgN"
+    local HttpService = game:GetService("HttpService")
+    local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
+    local lastReport, lastErrKey = 0, nil
+
+    local function sendWebhook(text)
+        if not httpRequest or WEBHOOK_URL == "" then return false end
+        return pcall(function()
+            for i = 1, #text, 1800 do
+                httpRequest({
+                    Url = WEBHOOK_URL, Method = "POST",
+                    Headers = { ["Content-Type"] = "application/json" },
+                    Body = HttpService:JSONEncode({ content = "```\n"..text:sub(i, i + 1799).."\n```" }),
+                })
+                task.wait(0.5)
+            end
+        end)
+    end
+
+    -- envia erro/bug (com limite: 1 a cada 5s; mesmo erro 1 a cada 60s)
+    local function reportBug(kind, msg)
+        local key = kind..tostring(msg)
+        if key == lastErrKey and os.clock() - lastReport < 60 then return end
+        if os.clock() - lastReport < 5 then return end
+        lastErrKey = key; lastReport = os.clock()
+        local alvo = BF.BossMob or BF.FreeMob or (BF.SelectedQuest and BF.SelectedQuest.mob) or "auto"
+        local text = ("[%s] v12 | PlaceId=%s | Lv=%s | modo=%s\n%s"):format(
+            kind, tostring(game.PlaceId), tostring(getLvl()), tostring(alvo), tostring(msg))
+        task.spawn(sendWebhook, text)
+    end
+
     -- WaterWalking: atributo do proprio jogo
     local function applyWater(on)
         local c = LP.Character
@@ -515,7 +547,7 @@ return function(ctx)
         if h and h.Parent then h.PlatformStand = oPS; h.AutoRotate = oAR end
         restoreCollide(saved)
         FlyFarmMoving = false
-        if not ok then warn("flyTo:", err) end
+        if not ok then warn("flyTo:", err); reportBug("flyTo erro", err) end
         return reached
     end
 
@@ -621,6 +653,7 @@ return function(ctx)
         local mobs = getMobs(mobName)
 
         if #mobs == 0 then
+            BF.NoMobSince = BF.NoMobSince or os.clock()
             -- 1) inimigo vivo por perto (raio curto se ha spawns; amplo se nao ha)
             local radii = spawnsFor(mobName) and { 70 } or { 100, 200, 400, 800 }
             for _, r in ipairs(radii) do
@@ -671,12 +704,39 @@ return function(ctx)
 
         BF.OrbitStart = 0
         BF.OrbitAnchor = nil
+        BF.NoMobSince = nil
 
         if (h.Position - mh.Position).Magnitude > 20 then
             local dest = mh.Position + Vector3.new(0, BF.Height, 0)
             goTo(dest, travelTimeout(h.Position, dest, 60))
         end
         return mob
+    end
+
+    -- resumo do estado atual (usado nos relatorios)
+    function BF.snapshot()
+        local mobName, q = resolveTarget()
+        local h = getHRP()
+        local sl = mobName and spawnsFor(mobName)
+        local L = {
+            ("alvo=%s quest=%s hasQ=%s titulo=%s match=%s"):format(tostring(mobName), q and q.quest or "-",
+                tostring(hasQ()), tostring(getQT()), tostring(q and questMatches(q))),
+            ("achados=%d spawns=%d fly=%s pos=%s"):format(mobName and #getMobs(mobName) or 0, sl and #sl or 0,
+                tostring(BF.FlyFarm), h and tostring(h.Position) or "sem personagem"),
+        }
+        local enemies = workspace:FindFirstChild("Enemies")
+        if enemies and h then
+            local n = 0
+            for _, m in ipairs(enemies:GetChildren()) do
+                local r = getRoot(m); local hu = m:FindFirstChildOfClass("Humanoid")
+                if r and hu and hu.Health > 0 and (r.Position - h.Position).Magnitude < 300 then
+                    n += 1
+                    if n <= 8 then table.insert(L, ("  '%s' %.0f studs"):format(m.Name, (r.Position - h.Position).Magnitude)) end
+                end
+            end
+            table.insert(L, "inimigos < 300 studs: "..n)
+        end
+        return table.concat(L, "\n")
     end
 
     local function farmTick()
@@ -700,6 +760,10 @@ return function(ctx)
         end
 
         local mob = huntMob(mobName, q and questPos(q))
+        if BF.NoMobSince and os.clock() - BF.NoMobSince > 30 then
+            BF.NoMobSince = os.clock()
+            reportBug("sem mobs ha 30s", BF.snapshot and BF.snapshot() or "")
+        end
         if mob then engage(mob, q) end
     end
 
@@ -709,7 +773,7 @@ return function(ctx)
         BF.FarmThread = task.spawn(function()
             while BF.Enabled do
                 local ok, err = pcall(farmTick)
-                if not ok then warn("farmTick:", err); FlyFarmMoving = false end
+                if not ok then warn("farmTick:", err); FlyFarmMoving = false; reportBug("farmTick erro", err) end
                 task.wait(0.15)
             end
             BF.FarmThread = nil
@@ -809,6 +873,7 @@ return function(ctx)
         for _, l in ipairs(lines) do print(l) end
         pcall(function() rconsoleprint(text.."\n") end)
         local copied = pcall(function() setclipboard(text) end)
+        task.spawn(sendWebhook, text)
         local short = {}
         for i = 1, math.min(#lines, 4) do short[i] = lines[i] end
         pcall(function() dbgLbl:Set(table.concat(short, " | ")) end)
@@ -896,6 +961,11 @@ return function(ctx)
             end
         end
         emit(L)
+    end })
+
+    sFarm:AddButton({ Name="Enviar relatorio ao Discord", Callback=function()
+        local sent = sendWebhook("[manual] v12 | PlaceId="..tostring(game.PlaceId).." | Lv="..tostring(getLvl()).."\n"..BF.snapshot())
+        Library:Notify({Title="Webhook", Message=sent and "Enviado" or (httpRequest and "Falhou" or "Executor sem request()"), Type=sent and "success" or "warn"})
     end })
 
     sFarm:AddButton({ Name="Salvar minha posicao como ponto do mob", Callback=function()
