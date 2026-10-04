@@ -8,10 +8,12 @@ return function(ctx)
     local LP = Players.LocalPlayer
 
     --================================================--
-    -- 1. CRIAR ABA DO DOORS NA INTERFACE
+    -- 1. ABA DO DOORS (Usa a já existente ou cria se faltar)
     --================================================--
-    local doorsTab = Window:AddTab("Doors", "🚪")
+    local doorsTab = ctx.DoorsTab or Window:AddTab("Doors", "🚪")
+    
     local sDoorsInfo = doorsTab:AddSection("Informações & Estado")
+    local sDoorsESP = doorsTab:AddSection("Funcionalidades ESP & Alertas")
     
     local currentMode = "Desconhecido"
     pcall(function()
@@ -25,37 +27,64 @@ return function(ctx)
     end)
 
     sDoorsInfo:AddButton({ Name = "Modo Atual: " .. tostring(currentMode), Callback = function()
-        Library:Notify({Title = "DOORS", Message = "Modo de jogo: " .. tostring(currentMode), Type = "info"})
+        Library:Notify({Title = "DOORS", Message = "Modo de jogo atual: " .. tostring(currentMode), Type = "info"})
+    end })
+
+    -- Variáveis de controlo para os Toggles
+    local espExitEnabled = true
+    local espSodaEnabled = true
+    local espEntityEnabled = true
+
+    sDoorsESP:AddToggle({ Name = "ESP Saídas (RoomExit)", Default = true, Callback = function(v) 
+        espExitEnabled = v 
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj.Name == "RoomExitHighlight" then obj.Enabled = v end
+        end
+    end })
+
+    sDoorsESP:AddToggle({ Name = "ESP GweenSodaPack", Default = true, Callback = function(v) 
+        espSodaEnabled = v 
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj.Name == "ItemHighlight" then obj.Enabled = v end
+        end
+    end })
+
+    sDoorsESP:AddToggle({ Name = "Alerta e ESP de Entidades", Default = true, Callback = function(v) 
+        espEntityEnabled = v 
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj.Name == "EntityHighlight" then obj.Enabled = v end
+        end
     end })
 
     Library:Notify({
         Title = "DOORS Carregado!",
-        Message = "Aba 'Doors' adicionada ao menu! Modo: " .. tostring(currentMode),
+        Message = "Funcionalidades aplicadas! Modo: " .. tostring(currentMode),
         Type = "success",
-        Duration = 7
+        Duration = 6
     })
 
     --================================================--
-    -- 2. ESP PARA ROOMEXIT E GWEENSODAPACK
+    -- 2. ESP PARA ROOMEXIT E GWEENSODAPACK (CurrentRooms)
     --================================================--
     local currentRooms = workspace:WaitForChild("CurrentRooms", 10)
     
     local function checkRoomDescendant(descendant)
-        -- ESP para o item GweenSodaPack (Cor: Verde)
+        -- ESP para GweenSodaPack (Verde)
         if descendant.Name == "GweenSodaPack" then
             if not descendant:FindFirstChild("ItemHighlight") then
                 local hl = Instance.new("Highlight")
                 hl.Name = "ItemHighlight"
-                hl.FillColor = Color3.fromRGB(0, 255, 0) -- Verde
+                hl.FillColor = Color3.fromRGB(0, 255, 0)
                 hl.OutlineColor = Color3.fromRGB(255, 255, 255)
                 hl.FillTransparency = 0.4
                 hl.OutlineTransparency = 0
                 hl.Adornee = descendant
+                hl.Enabled = espSodaEnabled
                 hl.Parent = descendant
             end
         end
 
-        -- ESP para as portas RoomExit (Cor: Ciano)
+        -- ESP para portas RoomExit (Ciano)
         if descendant.Name == "RoomExit" then
             local targetPart = descendant
             if descendant:IsA("Attachment") then
@@ -66,11 +95,12 @@ return function(ctx)
                 if not targetPart:FindFirstChild("RoomExitHighlight") then
                     local hl = Instance.new("Highlight")
                     hl.Name = "RoomExitHighlight"
-                    hl.FillColor = Color3.fromRGB(0, 255, 255) -- Ciano
+                    hl.FillColor = Color3.fromRGB(0, 255, 255)
                     hl.OutlineColor = Color3.fromRGB(255, 255, 255)
                     hl.FillTransparency = 0.5
                     hl.OutlineTransparency = 0
                     hl.Adornee = targetPart
+                    hl.Enabled = espExitEnabled
                     hl.Parent = targetPart
                 end
             end
@@ -96,21 +126,24 @@ return function(ctx)
     local function handleEntity(entity)
         if not entity or not entity.Parent then return end
 
-        Library:Notify({
-            Title = "⚠️ ENTIDADE DETETADA!",
-            Message = entity.Name .. " está no mapa!",
-            Type = "error",
-            Duration = 6
-        })
+        if espEntityEnabled then
+            Library:Notify({
+                Title = "⚠️ ENTIDADE DETETADA!",
+                Message = entity.Name .. " surgiu no mapa!",
+                Type = "error",
+                Duration = 6
+            })
+        end
 
         if not entity:FindFirstChild("EntityHighlight") then
             local hl = Instance.new("Highlight")
             hl.Name = "EntityHighlight"
-            hl.FillColor = Color3.fromRGB(255, 0, 0) -- Vermelho
-            hl.OutlineColor = Color3.fromRGB(255, 255, 0) -- Amarelo
+            hl.FillColor = Color3.fromRGB(255, 0, 0)
+            hl.OutlineColor = Color3.fromRGB(255, 255, 0)
             hl.FillTransparency = 0.3
             hl.OutlineTransparency = 0
             hl.Adornee = entity
+            hl.Enabled = espEntityEnabled
             hl.Parent = entity
         end
     end
