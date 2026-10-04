@@ -1,178 +1,156 @@
--- Módulo DOORS - Premium Hub v10.9
+-- Módulo DOORS PRO - Premium Hub v10.9
 return function(ctx)
-    local L = ctx.L
     local Library = ctx.Library
     local Window = ctx.Window
-    local Players = ctx.Players
+    local Workspace = game:GetService("Workspace")
     local ReplicatedStorage = game:GetService("ReplicatedStorage")
-    local LP = Players.LocalPlayer
 
-    --================================================--
-    -- 1. ABA DO DOORS (Usa a já existente ou cria se faltar)
-    --================================================--
+    -- ==========================================
+    -- 1. CRIAÇÃO DA INTERFACE (Sem Duplicações)
+    -- ==========================================
     local doorsTab = ctx.DoorsTab or Window:AddTab("Doors", "🚪")
     
-    local sDoorsInfo = doorsTab:AddSection("Informações & Estado")
-    local sDoorsESP = doorsTab:AddSection("Funcionalidades ESP & Alertas")
-    
+    local sInfo = doorsTab:AddSection("Informações & Estado")
+    local sESP = doorsTab:AddSection("Funcionalidades ESP")
+
+    -- Obter modo atual de forma segura
     local currentMode = "Desconhecido"
     pcall(function()
-        local gameData = ReplicatedStorage:WaitForChild("GameData", 5)
-        if gameData then
-            local floor = gameData:FindFirstChild("Floor")
-            if floor and floor:IsA("StringValue") then
-                currentMode = floor.Value
+        local floor = ReplicatedStorage:WaitForChild("GameData", 3):WaitForChild("Floor", 3)
+        if floor then currentMode = floor.Value end
+    end)
+
+    sInfo:AddButton({
+        Name = "Modo Atual: " .. tostring(currentMode),
+        Callback = function()
+            Library:Notify({Title = "DOORS", Message = "Modo: " .. tostring(currentMode), Type = "info"})
+        end
+    })
+
+    -- ==========================================
+    -- 2. LÓGICA DOS TOGGLES E VARIÁVEIS
+    -- ==========================================
+    local ESP_Settings = { RoomExit = true, Soda = true, Entities = true }
+
+    sESP:AddToggle({
+        Name = "ESP Saídas (RoomExit)",
+        Default = true,
+        Callback = function(v)
+            ESP_Settings.RoomExit = v
+            for _, hl in ipairs(Workspace:GetDescendants()) do
+                if hl.Name == "ExitESP" then hl.Enabled = v end
             end
+        end
+    })
+
+    sESP:AddToggle({
+        Name = "ESP Itens (GweenSodaPack)",
+        Default = true,
+        Callback = function(v)
+            ESP_Settings.Soda = v
+            for _, hl in ipairs(Workspace:GetDescendants()) do
+                if hl.Name == "SodaESP" then hl.Enabled = v end
+            end
+        end
+    })
+
+    sESP:AddToggle({
+        Name = "ESP Entidades + Alerta",
+        Default = true,
+        Callback = function(v)
+            ESP_Settings.Entities = v
+            for _, hl in ipairs(Workspace:GetDescendants()) do
+                if hl.Name == "EntityESP" then hl.Enabled = v end
+            end
+        end
+    })
+
+    -- ==========================================
+    -- 3. MOTOR DE ESP OTIMIZADO (Sem Lag)
+    -- ==========================================
+    local function createHighlight(parent, name, fillColor, outlineColor)
+        if not parent or parent:FindFirstChild(name) then return end
+        
+        local hl = Instance.new("Highlight")
+        hl.Name = name
+        hl.FillColor = fillColor
+        hl.OutlineColor = outlineColor
+        hl.FillTransparency = 0.5
+        hl.OutlineTransparency = 0
+        hl.Adornee = parent
+        hl.Parent = parent
+        
+        if name == "ExitESP" then hl.Enabled = ESP_Settings.RoomExit
+        elseif name == "SodaESP" then hl.Enabled = ESP_Settings.Soda
+        elseif name == "EntityESP" then hl.Enabled = ESP_Settings.Entities
+        end
+    end
+
+    -- Sistema que analisa apenas quartos novos (Muito mais leve que GetDescendants constante)
+    local function scanRoom(room)
+        -- Procurar Saída
+        local exit = room:FindFirstChild("RoomExit")
+        if exit then
+            local target = exit:IsA("Attachment") and exit.Parent or exit
+            createHighlight(target, "ExitESP", Color3.fromRGB(0, 255, 255), Color3.fromRGB(255, 255, 255))
+        end
+        
+        -- Procurar Itens (Soda) dentro do quarto
+        for _, item in ipairs(room:GetDescendants()) do
+            if item.Name == "GweenSodaPack" then
+                createHighlight(item, "SodaESP", Color3.fromRGB(0, 255, 0), Color3.fromRGB(255, 255, 255))
+            end
+        end
+    end
+
+    -- Conectar às salas geradas
+    task.spawn(function()
+        local currentRooms = Workspace:WaitForChild("CurrentRooms", 10)
+        if currentRooms then
+            -- Verifica os quartos que já existem
+            for _, room in ipairs(currentRooms:GetChildren()) do
+                scanRoom(room)
+            end
+            -- Fica à escuta de novos quartos que o jogador abre
+            currentRooms.ChildAdded:Connect(function(room)
+                task.wait(0.5) -- Pequeno delay para os assets do quarto carregarem
+                scanRoom(room)
+            end)
         end
     end)
 
-    sDoorsInfo:AddButton({ Name = "Modo Atual: " .. tostring(currentMode), Callback = function()
-        Library:Notify({Title = "DOORS", Message = "Modo de jogo atual: " .. tostring(currentMode), Type = "info"})
-    end })
-
-    -- Variáveis de controlo para os Toggles
-    local espExitEnabled = true
-    local espSodaEnabled = true
-    local espEntityEnabled = true
-
-    sDoorsESP:AddToggle({ Name = "ESP Saídas (RoomExit)", Default = true, Callback = function(v) 
-        espExitEnabled = v 
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj.Name == "RoomExitHighlight" then obj.Enabled = v end
-        end
-    end })
-
-    sDoorsESP:AddToggle({ Name = "ESP GweenSodaPack", Default = true, Callback = function(v) 
-        espSodaEnabled = v 
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj.Name == "ItemHighlight" then obj.Enabled = v end
-        end
-    end })
-
-    sDoorsESP:AddToggle({ Name = "Alerta e ESP de Entidades", Default = true, Callback = function(v) 
-        espEntityEnabled = v 
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj.Name == "EntityHighlight" then obj.Enabled = v end
-        end
-    end })
-
-    Library:Notify({
-        Title = "DOORS Carregado!",
-        Message = "Funcionalidades aplicadas! Modo: " .. tostring(currentMode),
-        Type = "success",
-        Duration = 6
-    })
-
-    --================================================--
-    -- 2. ESP PARA ROOMEXIT E GWEENSODAPACK (CurrentRooms)
-    --================================================--
-    local currentRooms = workspace:WaitForChild("CurrentRooms", 10)
-    
-    local function checkRoomDescendant(descendant)
-        -- ESP para GweenSodaPack (Verde)
-        if descendant.Name == "GweenSodaPack" then
-            if not descendant:FindFirstChild("ItemHighlight") then
-                local hl = Instance.new("Highlight")
-                hl.Name = "ItemHighlight"
-                hl.FillColor = Color3.fromRGB(0, 255, 0)
-                hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-                hl.FillTransparency = 0.4
-                hl.OutlineTransparency = 0
-                hl.Adornee = descendant
-                hl.Enabled = espSodaEnabled
-                hl.Parent = descendant
+    -- Conectar às Entidades (Rush, Ambush, etc)
+    task.spawn(function()
+        local function handleEntity(entity)
+            if ESP_Settings.Entities then
+                Library:Notify({
+                    Title = "⚠️ AVISO DE ENTIDADE",
+                    Message = entity.Name .. " acabou de spawnar!",
+                    Type = "error",
+                    Duration = 5
+                })
             end
+            createHighlight(entity, "EntityESP", Color3.fromRGB(255, 0, 0), Color3.fromRGB(255, 255, 0))
         end
 
-        -- ESP para portas RoomExit (Ciano)
-        if descendant.Name == "RoomExit" then
-            local targetPart = descendant
-            if descendant:IsA("Attachment") then
-                targetPart = descendant.Parent
+        local liveFolder = Workspace:WaitForChild("LiveEntities", 10)
+        if liveFolder then
+            for _, ent in ipairs(liveFolder:GetChildren()) do 
+                handleEntity(ent) 
             end
             
-            if targetPart and (targetPart:IsA("BasePart") or targetPart:IsA("Model")) then
-                if not targetPart:FindFirstChild("RoomExitHighlight") then
-                    local hl = Instance.new("Highlight")
-                    hl.Name = "RoomExitHighlight"
-                    hl.FillColor = Color3.fromRGB(0, 255, 255)
-                    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-                    hl.FillTransparency = 0.5
-                    hl.OutlineTransparency = 0
-                    hl.Adornee = targetPart
-                    hl.Enabled = espExitEnabled
-                    hl.Parent = targetPart
-                end
-            end
-        end
-    end
-
-    if currentRooms then
-        for _, desc in ipairs(currentRooms:GetDescendants()) do
-            task.spawn(function()
-                checkRoomDescendant(desc)
-            end)
-        end
-
-        currentRooms.DescendantAdded:Connect(function(desc)
-            task.wait(0.1)
-            checkRoomDescendant(desc)
-        end)
-    end
-
-    --================================================--
-    -- 3. ALERTA E ESP DE ENTIDADES (LiveEntities)
-    --================================================--
-    local function handleEntity(entity)
-        if not entity or not entity.Parent then return end
-
-        if espEntityEnabled then
-            Library:Notify({
-                Title = "⚠️ ENTIDADE DETETADA!",
-                Message = entity.Name .. " surgiu no mapa!",
-                Type = "error",
-                Duration = 6
-            })
-        end
-
-        if not entity:FindFirstChild("EntityHighlight") then
-            local hl = Instance.new("Highlight")
-            hl.Name = "EntityHighlight"
-            hl.FillColor = Color3.fromRGB(255, 0, 0)
-            hl.OutlineColor = Color3.fromRGB(255, 255, 0)
-            hl.FillTransparency = 0.3
-            hl.OutlineTransparency = 0
-            hl.Adornee = entity
-            hl.Enabled = espEntityEnabled
-            hl.Parent = entity
-        end
-    end
-
-    local function setupLiveEntities()
-        local liveEntitiesFolder = workspace:WaitForChild("LiveEntities", 10) or workspace:FindFirstChild("LiveEntities")
-        
-        if liveEntitiesFolder then
-            for _, entity in ipairs(liveEntitiesFolder:GetChildren()) do
-                task.spawn(function()
-                    handleEntity(entity)
-                end)
-            end
-
-            liveEntitiesFolder.ChildAdded:Connect(function(entity)
+            -- O ERRO CRÍTICO ANTERIOR ESTAVA AQUI, AGORA ESTÁ CORRIGIDO
+            liveFolder.ChildAdded:Connect(function(ent)
                 task.wait(0.1)
-                handleEntity(entity)
-            end)
-        else
-            workspace.ChildAdded:Connect(function(child)
-                if child.Name == "LiveEntities" then
-                    child.ChildAdded:Connect(function(entity)
-                        task.wait(0.1)
-                        handleEntity(entity)
-                    end)
-                end
+                handleEntity(ent)
             end)
         end
-    end
+    end)
 
-    task.spawn(setupLiveEntities)
+    Library:Notify({
+        Title = "DOORS (PRO)",
+        Message = "Módulo carregado e otimizado com sucesso!",
+        Type = "success",
+        Duration = 4
+    })
 end
