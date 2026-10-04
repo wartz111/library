@@ -47,9 +47,9 @@ return function(ctx)
 
     local BF = {
         Enabled = false, FarmThread = nil,
-        SelectedQuest = nil,   -- quest manual (nil = automatico por nivel)
-        FreeMob = nil,         -- farm sem quest (nome do mob)
-        BossMob = nil,         -- farm de boss (nome do boss)
+        SelectedQuest = nil,
+        FreeMob = nil,
+        BossMob = nil,
         FlyFarm = true, FlySpeed = 60, FastAttack = true, BringMobs = false,
         WeaponType = "Melee", Height = 4, WaterWalk = false,
         QuestCooldown = 0, LastNotify = 0,
@@ -75,7 +75,6 @@ return function(ctx)
         local ok, t = pcall(function() return LP.PlayerGui.Main.Quest.Container.QuestTitle.Title.Text end)
         return ok and t or nil
     end
-    -- compara ignorando plural (Snowman/Snowmen, Spy/Spies)
     local function questMatches(q)
         local t = getQT()
         if not t or t == "" then return true end
@@ -110,12 +109,10 @@ return function(ctx)
         pcall(function() Library:Notify({Title = title, Message = msg, Type = kind or "info", Duration = dur or 1.5}) end)
     end
 
-    -- pontos fixos de farm por mob (centro da area onde eles ficam)
     local FARM_SPOTS = {
         ["snow bandit"] = { pos = Vector3.new(1183.19, -0.07, -5374.92), water = true },
     }
 
-    -- WaterWalking: atributo do proprio jogo (aparece em Attributes do personagem)
     local function applyWater(on)
         local c = LP.Character
         local found = false
@@ -131,7 +128,6 @@ return function(ctx)
         if not found and c then pcall(function() c:SetAttribute("WaterWalking", on) end) end
     end
 
-    -- NOCLIP continuo: o jogo reativa a colisao todo frame, entao reforcamos no Stepped
     local RunService = game:GetService("RunService")
     local NoclipSaved = {}
     local noclipConn
@@ -159,10 +155,10 @@ return function(ctx)
     end
 
     --================================================--
-    -- SPAWNS (workspace._WorldOrigin.EnemySpawns)
+    -- SPAWNS
     --================================================--
-    local SpawnsByMob = {}   -- ["bandit"] = { {pos, level, boss, name} }
-    local SpawnNames = {}    -- ["bandit"] = "Bandit" (nome original)
+    local SpawnsByMob = {}
+    local SpawnNames = {}
 
     local function parseName(name)
         local mob, lv, rest = name:match("^(.-)%s*%[Lv%.%s*(%d+)%](.*)$")
@@ -181,7 +177,7 @@ return function(ctx)
         local k = mob:lower()
         SpawnsByMob[k] = SpawnsByMob[k] or {}
         for _, sp in ipairs(SpawnsByMob[k]) do
-            if (sp.pos - pos).Magnitude < 5 then return end -- duplicado
+            if (sp.pos - pos).Magnitude < 5 then return end
         end
         SpawnNames[k] = SpawnNames[k] or mob
         table.insert(SpawnsByMob[k], { pos = pos, level = lv or 0, boss = boss })
@@ -195,7 +191,6 @@ return function(ctx)
     local function scanSpawns()
         table.clear(SpawnsByMob); table.clear(SpawnNames)
 
-        -- 1) workspace._WorldOrigin.EnemySpawns (tem nivel e [Boss])
         local origin = workspace:FindFirstChild("_WorldOrigin")
         local folder = origin and origin:FindFirstChild("EnemySpawns")
         if folder then
@@ -206,7 +201,6 @@ return function(ctx)
             end
         end
 
-        -- 2) ReplicatedStorage.FortBuilderReplicatedSpawnPositionsFolder (so o nome)
         local rs = game:GetService("ReplicatedStorage"):FindFirstChild("FortBuilderReplicatedSpawnPositionsFolder")
         if rs then
             for _, sp in ipairs(rs:GetChildren()) do
@@ -232,7 +226,6 @@ return function(ctx)
         return best
     end
 
-    -- lista de mobs normais / bosses para dropdowns, ordenados por nivel
     local function buildMobLists()
         local normals, bosses = {}, {}
         for k, list in pairs(SpawnsByMob) do
@@ -264,7 +257,6 @@ return function(ctx)
         return (b or n):lower()
     end
 
-    -- normaliza: tira nivel, simbolos, plural (Snowmen->snowman, Spies->spy)
     local function norm(s)
         local b = parseName(s)
         s = (b or s):lower()
@@ -283,7 +275,6 @@ return function(ctx)
         return r
     end
 
-    -- mobs "estacionados" (longe do spawn / na origem) nao contam
     local function validPos(mobName, pos)
         if pos.Magnitude < 20 then return false end
         local me = getHRP()
@@ -296,7 +287,6 @@ return function(ctx)
         return false
     end
 
-    -- 1a passada: nome exato (normalizado). 2a: parcial, so se estiver perto
     local function getMobs(mobName)
         local exact, fuzzy = {}, {}
         local enemies = workspace:FindFirstChild("Enemies")
@@ -320,7 +310,6 @@ return function(ctx)
         return fuzzy
     end
 
-    -- qualquer inimigo vivo perto (ultimo recurso)
     local function nearestAnyEnemy(from, radius)
         local enemies = workspace:FindFirstChild("Enemies")
         if not enemies then return nil end
@@ -336,7 +325,6 @@ return function(ctx)
         return best
     end
 
-    -- percorre os spawns do mob, do mais perto de "ref" para o mais longe
     local SpawnIdx = {}
     local function pickSpawn(mobName, ref)
         local list = SpawnsByMob[mobName:lower()]
@@ -380,7 +368,6 @@ return function(ctx)
         end
         return t
     end
-    -- clique de mouse real (VirtualInputManager dispara o soco do jogo)
     local VIM = game:GetService("VirtualInputManager")
     local function atk(t)
         if t then pcall(function() t:Activate() end) end
@@ -409,9 +396,16 @@ return function(ctx)
         end
     end
 
+    -- flyTo com timeout adaptativo automatico
     local function flyTo(target, speed, timeout)
         local ch, h, hrp = GetChar(LP)
         if not hrp or not h then return false end
+
+        -- timeout adaptativo: baseado na distancia real + folga
+        local dist = (target - hrp.Position).Magnitude
+        local autoTO = math.clamp(dist / math.max(speed, 20) * 2.5, 10, 120)
+        timeout = math.max(timeout or 0, autoTO)
+
         FlyFarmMoving = true
         local oAR, oPS = h.AutoRotate, h.PlatformStand
         local saved = {}
@@ -420,7 +414,7 @@ return function(ctx)
         local ok, err = pcall(function()
             h.PlatformStand = true; h.AutoRotate = false
             setNoCollide(ch, saved)
-            local deadline = os.clock() + (timeout or 15)
+            local deadline = os.clock() + timeout
             while BF.Enabled and os.clock() < deadline do
                 if not hrp.Parent then break end
                 local mp = hrp.Position
@@ -433,7 +427,6 @@ return function(ctx)
             end
         end)
 
-        -- limpeza sempre executa
         if hrp and hrp.Parent then hrp.AssemblyLinearVelocity = Vector3.zero end
         if h and h.Parent then h.PlatformStand = oPS; h.AutoRotate = oAR end
         restoreCollide(saved)
@@ -450,7 +443,6 @@ return function(ctx)
     --================================================--
     -- FARM
     --================================================--
-    -- retorna: mobName, quest (ou nil)
     local function resolveTarget()
         if BF.BossMob then return BF.BossMob, nil end
         if BF.FreeMob then return BF.FreeMob, nil end
@@ -460,7 +452,7 @@ return function(ctx)
         return q.mob, q
     end
 
-    -- garante quest correta ativa. true = pode atacar
+    -- CORRIGIDO: so envia a quest depois de confirmar que chegou no NPC
     local function ensureQuest(q)
         if hasQ() then
             if questMatches(q) then return true end
@@ -471,10 +463,24 @@ return function(ctx)
         end
         if BF.QuestCooldown > os.clock() then return false end
         local h = getHRP(); if not h then return false end
+
+        -- 1) Vai ate o NPC primeiro (com timeout adaptativo)
         if (h.Position - q.pos).Magnitude > 15 then
             notify("Auto Farm", "Indo ate "..q.npc)
-            goTo(q.pos + Vector3.new(0, 5, 0), 20)
+            local dist = (h.Position - (q.pos + Vector3.new(0,5,0))).Magnitude
+            local to = math.clamp(dist / math.max(BF.FlySpeed, 20) + 5, 10, 90)
+            goTo(q.pos + Vector3.new(0, 5, 0), to)
+
+            task.wait(0.15)
+            h = getHRP()
+            if not h or (h.Position - q.pos).Magnitude > 25 then
+                -- NAO chegou -> NAO envia quest. Tenta de novo no proximo tick.
+                BF.QuestCooldown = os.clock() + 0.3
+                return false
+            end
         end
+
+        -- 2) Chegou no NPC -> agora sim envia a quest
         sendQ(q.quest, q.index)
         task.wait(0.5)
         BF.QuestCooldown = os.clock() + 0.8
@@ -508,7 +514,6 @@ return function(ctx)
                 if not hrp or h.Health <= 0 then break end
                 if q and not hasQ() then break end
 
-                -- fica logo acima do mob, olhando para ele (sem PlatformStand, senao o soco nao sai)
                 local pos = mh.Position + Vector3.new(0, BF.Height, 2)
                 hrp.CFrame = CFrame.lookAt(pos, mh.Position)
                 hrp.AssemblyLinearVelocity = Vector3.zero
@@ -529,13 +534,10 @@ return function(ctx)
         local h = getHRP(); if not h then return end
         local mobs = getMobs(mobName)
 
-        -- nenhum mob com o nome certo
         if #mobs == 0 then
-            -- ultimo recurso: ataca qualquer inimigo vivo perto
             local near = nearestAnyEnemy(h.Position, 70)
             if near then return near end
 
-            -- percorre os spawns perto do NPC, um por vez
             local ref = fallbackPos or h.Position
             local sp, key = pickSpawn(mobName, ref)
             local dest = sp and (sp.pos + Vector3.new(0, 10, 0))
@@ -543,9 +545,11 @@ return function(ctx)
             if dest then
                 if (h.Position - dest).Magnitude > 25 then
                     notify("Auto Farm", "Procurando "..mobName)
-                    goTo(dest, 20)
+                    -- timeout adaptativo por distancia
+                    local dist = (h.Position - dest).Magnitude
+                    local to = math.clamp(dist / math.max(BF.FlySpeed, 20) + 5, 10, 60)
+                    goTo(dest, to)
                 else
-                    -- chegou e nao tem mob: espera respawn e vai ao proximo spawn
                     task.wait(1.5)
                     if key then SpawnIdx[key] = (SpawnIdx[key] or 0) + 1 end
                 end
@@ -563,7 +567,10 @@ return function(ctx)
         if not mh then return end
 
         if (h.Position - mh.Position).Magnitude > 20 then
-            goTo(mh.Position + Vector3.new(0, BF.Height, 0), 15)
+            -- timeout adaptativo tambem no destino do mob
+            local dist = (h.Position - mh.Position).Magnitude
+            local to = math.clamp(dist / math.max(BF.FlySpeed, 20) + 5, 10, 60)
+            goTo(mh.Position + Vector3.new(0, BF.Height, 0), to)
         end
         return mob
     end
@@ -712,7 +719,14 @@ return function(ctx)
         print("alvo:", mobName, "| normalizado:", mobName and norm(mobName))
         print("achados por nome:", mobName and #getMobs(mobName) or 0)
         print("spawns na pasta:", mobName and SpawnsByMob[mobName:lower()] and #SpawnsByMob[mobName:lower()] or 0)
+        if q then
+            print("quest:", q.quest, "#"..q.index, "| npc:", q.npc, "| pos NPC:", tostring(q.pos))
+        end
+        print("hasQ:", hasQ(), "| QuestTitle:", getQT())
         local h = getHRP()
+        if h and q then
+            print(("distancia ate o NPC: %.0f studs"):format((h.Position - q.pos).Magnitude))
+        end
         local enemies = workspace:FindFirstChild("Enemies")
         if enemies and mobName then
             print("todos com esse nome (valido = perto de um spawn):")
@@ -776,7 +790,6 @@ return function(ctx)
     local sInfo = bfTab:AddSection("Info")
     local infoLbl = sInfo:AddLabel("Carregando...")
 
-    -- loop unico de UI
     local alive = true
     task.spawn(function()
         while alive do
@@ -810,7 +823,6 @@ return function(ctx)
         if BF.WaterWalk then applyWater(true) end
     end)
 
-    -- permite parar tudo ao descarregar o hub
     return function()
         alive = false
         stopNoclip()
