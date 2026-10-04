@@ -1,0 +1,39 @@
+--!nocheck
+--================================================--
+-- PREMIUM HUB v10.9 - MM2 MODULE
+--================================================--
+return function(ctx)
+    local Library=ctx.Library; local CFG=ctx.CFG; local Window=ctx.Window
+    local LP=ctx.LP; local GetChar=ctx.GetChar
+    local IS_MM2=ctx.L.IS_MM2
+
+    if not IS_MM2 then return end
+
+    --================================================--
+    -- UI
+    --================================================--
+    local mm2Tab = Window:AddTab("Murder Mystery 2", "🔪")
+    local sMM2St = mm2Tab:AddSection("Status")
+    local mm2St = sMM2St:AddLabel("Verificando...")
+    task.spawn(function() task.wait(2); mm2St:Set("[OK] MM2 detectado") end)
+
+    local sMM2E = mm2Tab:AddSection("ESP")
+    sMM2E:AddToggle({ Name="ESP Murderer", Default=false, Flag="MM2_ESP_Murderer", Callback=function(v) CFG.MM2_ESP_Murderer=v end })
+    sMM2E:AddToggle({ Name="ESP Sheriff", Default=false, Flag="MM2_ESP_Sheriff", Callback=function(v) CFG.MM2_ESP_Sheriff=v end })
+    sMM2E:AddToggle({ Name="ESP Innocent", Default=false, Flag="MM2_ESP_Innocent", Callback=function(v) CFG.MM2_ESP_Innocent=v end })
+
+    local sMM2M = mm2Tab:AddSection("Speed e Jump")
+    sMM2M:AddSlider({ Name="Velocidade", Min=16, Max=100, Default=16, Step=1, Flag="MM2_Speed", Callback=function(v) CFG.MM2_Speed=v end })
+    sMM2M:AddSlider({ Name="Pulo", Min=50, Max=200, Default=50, Step=5, Flag="MM2_Jump", Callback=function(v) CFG.MM2_Jump=v end })
+
+    --================================================--
+    -- LOOP
+    --================================================--
+    task.spawn(function() while task.wait(0.2) do
+        local _,h = GetChar(LP)
+        if h then
+            if CFG.MM2_Speed~=16 then h.WalkSpeed=CFG.MM2_Speed end
+            if CFG.MM2_Jump~=50 then h.JumpPower=CFG.MM2_Jump end
+        end
+    end end)
+end
