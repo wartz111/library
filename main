@@ -4,13 +4,13 @@
 --================================================--
 local BASE_URL = "https://raw.githubusercontent.com/wartz111/library/refs/heads/main/"
 
--- Carrega Library base
+-- Carrega Library base (arquivo "w")
 local ok, Library = pcall(function()
-    return loadstring(game:HttpGet(BASE_URL .. "library.lua"))()
+    return loadstring(game:HttpGet(BASE_URL .. "w"))()
 end)
 
 if not ok or not Library then
-    warn("[PremiumHub] Falha ao carregar library.lua: " .. tostring(Library))
+    warn("[PremiumHub] Falha ao carregar library (w): " .. tostring(Library))
     return
 end
 
@@ -42,7 +42,6 @@ Library.IS_MM2 = IS_MM2
 
 print("[PremiumHub] Jogo detectado: " .. GAME_NAME)
 
--- Carrega módulos na ordem
 local function loadModule(name)
     local ok, err = pcall(function()
         local code = game:HttpGet(BASE_URL .. name)
@@ -52,20 +51,21 @@ local function loadModule(name)
     if not ok then warn("[PremiumHub] Erro em " .. name .. ": " .. tostring(err)) end
 end
 
--- Ordem: universal primeiro, depois jogo específico
-loadModule("universal.lua")
+-- Carrega universal primeiro
+loadModule("universal")
 
+-- Depois o módulo específico do jogo
 if IS_BF then
-    print("[PremiumHub] Carregando modulo Blox Fruits...")
-    loadModule("blox_fruits.lua")
+    print("[PremiumHub] Carregando Blox Fruits...")
+    loadModule("blox_fruits")
 elseif IS_DOORS then
-    print("[PremiumHub] Carregando modulo DOORS...")
-    loadModule("doors.lua")
+    print("[PremiumHub] Carregando DOORS...")
+    loadModule("doors")
 elseif IS_MM2 then
-    print("[PremiumHub] Carregando modulo MM2...")
-    loadModule("mm2.lua")
+    print("[PremiumHub] Carregando MM2...")
+    loadModule("mm2")
 else
-    print("[PremiumHub] Jogo nao suportado - apenas features universais")
+    print("[PremiumHub] Jogo nao suportado - apenas universais")
 end
 
 print("[PremiumHub] Carregamento completo!")
