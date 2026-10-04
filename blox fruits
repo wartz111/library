@@ -153,10 +153,16 @@ return function(ctx)
         if ok and type(l) == "number" then return l end
         return nil
     end
+
+    -- Atualizado: Verificacao segura da interface de Quest
     local function hasQ()
-        local ok, v = pcall(function() return LP.PlayerGui.Main.Quest.Visible end)
-        return ok and v == true
+        local gui = LP:FindFirstChild("PlayerGui")
+        if gui and gui:FindFirstChild("Main") and gui.Main:FindFirstChild("Quest") then
+            return gui.Main.Quest.Visible == true
+        end
+        return false
     end
+
     local function getQT()
         local ok, t = pcall(function() return LP.PlayerGui.Main.Quest.Container.QuestTitle.Title.Text end)
         return ok and t or nil
@@ -649,13 +655,14 @@ return function(ctx)
         BF.QuestCooldown = os.clock() + 0.8
 
         if okQ and res == 0 then
-            for _ = 1, 6 do
+            -- Atualizado: Aguarda ate 5 segundos para a interface de quest atualizar
+            for _ = 1, 20 do
                 if hasQ() then break end
                 task.wait(0.25)
             end
             if hasQ() then return true end
             -- servidor aceitou mas a UI nao mostrou: bate nos mobs assim mesmo
-            BF.BlockedUntil[key] = os.clock() + 30
+            BF.BlockedUntil[key] = os.clock() + 120 -- Atualizado: Delay ampliado para 120s
             return "noquest"
         end
         if okQ and res == 2 then
@@ -942,7 +949,7 @@ return function(ctx)
         table.insert(L, "=== MOBS SEM QUEST ===")
         for k, list in pairs(SpawnsByMob) do
             if not known[k] then
-                table.insert(L, ("  %s | Lv %d | %s | %d spawns"):format(SpawnNames[k], list[1].level, list[1].boss and "BOSS" or "normal", #list))
+                table.insert(L, ("  %s | Lv %d | %s | %d spawns"):format(SpawnNames[k], list[1].level, list[1].boss and "normal", #list))
             end
         end
         table.insert(L, "=== QUESTS SEM SPAWN ===")
