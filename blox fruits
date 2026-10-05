@@ -1,6 +1,6 @@
 --!nocheck
 --================================================--
--- PREMIUM HUB v13 - BLOX FRUITS MODULE (versao unificada)
+-- PREMIUM HUB v15 - BLOX FRUITS MODULE (PRO VERSION)
 --================================================--
 return function(ctx)
     local Library = ctx.Library; local CFG = ctx.CFG; local Window = ctx.Window
@@ -12,9 +12,29 @@ return function(ctx)
 
     local RunService = game:GetService("RunService")
     local VIM = game:GetService("VirtualInputManager")
+    local TweenService = game:GetService("TweenService")
+    
+    --================================================--
+    -- SEA CHECKER (Reconhecimento de Mar)
+    --================================================--
+    local PlaceId = game.PlaceId
+    local Sea = 1
+    if PlaceId == 2753915549 then
+        Sea = 1
+    elseif PlaceId == 4442272554 then
+        Sea = 2
+    elseif PlaceId == 7449423635 then
+        Sea = 3
+    end
+
+    local function getSeaName()
+        if Sea == 1 then return "Primeiro Mar (First Sea)" end
+        if Sea == 2 then return "Segundo Mar (Second Sea)" end
+        if Sea == 3 then return "Terceiro Mar (Third Sea)" end
+    end
 
     --================================================--
-    -- HELPERS BASICOS (usados por varias secoes)
+    -- HELPERS BASICOS
     --================================================--
     local function getHRP()
         local c = LP.Character
@@ -28,7 +48,6 @@ return function(ctx)
         end
         return r
     end
-    -- "Snow Bandit [Lv. 90] [Boss]" -> "Snow Bandit", 90, true
     local function parseName(name)
         local mob, lv, rest = name:match("^(.-)%s*%[Lv%.%s*(%d+)%](.*)$")
         if not mob then return nil end
@@ -39,20 +58,19 @@ return function(ctx)
         s = (b or s):lower()
         return (s:gsub("[^%a%d]", ""))
     end
-    -- tira plural (Snowmen->snowman, Spies->spy, Guards->guard)
     local function stemOf(n)
         n = n:gsub("ies$", "y"):gsub("men$", "man"):gsub("s$", "")
         return n
     end
 
     --================================================--
-    -- DADOS: QUESTS (baseado em ReplicatedStorage.Quests)
+    -- DADOS: QUESTS E SPAWNS (LISTA COMPLETA RESTAURADA)
     --================================================--
     local QUESTS = {}
-    -- G(quest, npc, pos, { {levelReq, mob}, ... })  -> index = ordem na lista
     local function G(quest, npc, pos, entries)
         for i, e in ipairs(entries) do
-            table.insert(QUESTS, { minLevel = e[1], mob = e[2], quest = quest, index = i, npc = npc, pos = pos })
+            table.insert(QUESTS, { minLevel = e[1], mob = e[2], quest = quest, index = i, npc = npc, pos = pos,
+            sea = (e[1] < 700 and 1) or (e[1] < 1500 and 2) or 3 })
         end
     end
     local V = Vector3.new
@@ -105,8 +123,7 @@ return function(ctx)
     G("SubmergedQuest1","Submerged1 Quest Giver",V(-43098,11,-6329), {{2600,"Reef Bandit"},{2625,"Coral Pirate"}})
     G("SubmergedQuest2","Submerged2 Quest Giver",V(-44046,34,-7552), {{2650,"Sea Chanter"},{2675,"Ocean Prophet"}})
     G("SubmergedQuest3","Submerged3 Quest Giver",V(-47069,42,-7089), {{2675,"High Disciple"},{2700,"Grand Devotee"}})
-
-    -- bosses: ficam fora do modo automatico (tem respawn longo)
+    
     local BOSS_NAMES = {}
     for _, n in ipairs({"chef","cyborg","fishman lord","greybeard","ice admiral","magma admiral","magma general",
         "mob leader","mob boss","sky warlord","lightning god","yeti","vice admiral","saber expert","the gorilla king",
@@ -116,7 +133,6 @@ return function(ctx)
         BOSS_NAMES[n] = true
     end
 
-    -- nome na quest -> nome(s) que aparecem nos spawns/Enemies
     local ALIASES = {
         ["wysper"]        = { "sky warlord" },
         ["thunder god"]   = { "lightning god" },
@@ -124,29 +140,104 @@ return function(ctx)
         ["mob leader"]    = { "mob boss" },
     }
 
-    -- pontos fixos de farm por mob
     local FARM_SPOTS = {
         ["snow bandit"] = { pos = V(1183.19, -0.07, -5374.92), water = true },
     }
 
+    --================================================--
+    -- ESTADOS E VARIAVEIS PRINCIPAIS (BF TABLE)
+    --================================================--
     local BF = {
         Enabled = false, FarmThread = nil,
         SelectedQuest = nil, FreeMob = nil, BossMob = nil,
-        FlyFarm = true, FlySpeed = 60, FastAttack = true, BringMobs = false,
+        FlyFarm = true, FlySpeed = 250, FastAttack = true, BringMobs = false,
         WeaponType = "Melee", Height = 7, WaterWalk = false,
         QuestCooldown = 0, LastNotify = 0,
         OrbitStart = 0, OrbitAnchor = nil,
         BlockedLvl = {}, BlockedUntil = {}, LastQuestRes = nil,
         AutoBuso = false, AutoStats = false, StatName = "Melee",
         AntiAFK = true, SafeMode = true, SafeHP = 35, FPSBoost = false,
+        
+        -- Novas Flags Pro
+        FruitESP = false, AutoFruit = false,
+        AutoZ = false, AutoX = false, AutoC = false, AutoV = false,
+        AutoChest = false, 
+        KillAura = false, AuraRadius = 50,
+        PlayerESP = false,
+        AutoRaid = false, RaidChip = "Flame",
+        SeaEvents = false, BoatName = "Sloop",
+
+        -- v15
+        BossQuest = true, Mastery = false, MasteryWeapon = "Blox Fruit", MasteryTarget = 600,
+        AutoStore = false, FruitWebhook = false, FruitMinRank = "Todas", Webhook = "",
+        HopLow = false, HopMinPlayers = 5, HuntFruit = false,
+        AutoAwaken = false, Teleporting = false, TPIsland = nil
     }
+
+    --================================================--
+    -- CONFIG SALVA (writefile / readfile)
+    --================================================--
+    local HttpService = game:GetService("HttpService")
+    local CFG_FILE = "PremiumHub_BF_v15.json"
+    local WEBHOOK_FILE = "PremiumHub_BF_webhook.txt"
+    local PERSIST = {
+        "FlySpeed", "FastAttack", "BringMobs", "WeaponType", "SafeMode", "SafeHP", "AntiAFK",
+        "StatName", "AuraRadius", "RaidChip", "BoatName", "FruitMinRank",
+        "AutoZ", "AutoX", "AutoC", "AutoV", "HopMinPlayers",
+        "MasteryWeapon", "MasteryTarget", "BossQuest",
+    }
+
+    local function cfgLoad()
+        if not (readfile and isfile) then return end
+        local ok, data = pcall(function()
+            if isfile(CFG_FILE) then return HttpService:JSONDecode(readfile(CFG_FILE)) end
+        end)
+        if ok and type(data) == "table" then
+            for _, k in ipairs(PERSIST) do
+                if data[k] ~= nil and type(data[k]) == type(BF[k]) then BF[k] = data[k] end
+            end
+        end
+        pcall(function()
+            if isfile(WEBHOOK_FILE) then BF.Webhook = (readfile(WEBHOOK_FILE):gsub("%s+", "")) end
+        end)
+    end
+
+    local saveQueued = false
+    local function cfgSave()
+        if not writefile or saveQueued then return end
+        saveQueued = true
+        task.delay(1, function()
+            saveQueued = false
+            local out = {}
+            for _, k in ipairs(PERSIST) do out[k] = BF[k] end
+            pcall(function() writefile(CFG_FILE, HttpService:JSONEncode(out)) end)
+        end)
+    end
+
+    local function cfgReset()
+        pcall(function()
+            if delfile and isfile and isfile(CFG_FILE) then delfile(CFG_FILE) end
+        end)
+    end
+
+    local function setOpt(key, v)
+        BF[key] = v
+        cfgSave()
+    end
+
+    cfgLoad()
+
     local FlyFarmMoving = false
     SetFlyFarmStateMoving(function() return FlyFarmMoving end)
 
     --================================================--
-    -- UTILIDADES
+    -- FUNCOES UTILITARIAS E EXTRAS PRO
     --================================================--
-    local function questLabel(q) return q.mob.." ("..q.quest.." #"..q.index..")" end
+    local function notify(title, msg, kind, dur)
+        if os.clock() - BF.LastNotify < 1.5 then return end
+        BF.LastNotify = os.clock()
+        pcall(function() Library:Notify({Title = title, Message = msg, Type = kind or "info", Duration = dur or 1.5}) end)
+    end
 
     local function getLvl()
         local ok, l = pcall(function() return LP.Data.Level.Value end)
@@ -154,7 +245,6 @@ return function(ctx)
         return nil
     end
 
-    -- Atualizado: Verificacao segura da interface de Quest
     local function hasQ()
         local gui = LP:FindFirstChild("PlayerGui")
         if gui and gui:FindFirstChild("Main") and gui.Main:FindFirstChild("Quest") then
@@ -168,330 +258,157 @@ return function(ctx)
         return ok and t or nil
     end
 
-    -- entrada real da quest em ReplicatedStorage.Quests (Name da UI + Task)
-    local QuestData
-    local function getQuestEntry(q)
-        if QuestData == nil then
-            QuestData = false
-            pcall(function()
-                local mod = game:GetService("ReplicatedStorage"):FindFirstChild("Quests")
-                if mod then QuestData = require(mod) end
-            end)
-        end
-        local t = QuestData and QuestData[q.quest]
-        return t and t[q.index]
-    end
-
-    -- SUBSTITUIDO: Retorna sempre verdadeiro para ignorar o idioma do jogo
-    local function questMatches(q)
-        return true
-    end
-
-    -- ultima quest NORMAL (sem boss) cujo LevelReq <= nivel
-    local function pickQ(l)
-        local best
-        for _, q in ipairs(QUESTS) do
-            if l >= q.minLevel and not BOSS_NAMES[q.mob:lower()] then best = q end
-        end
-        return best
-    end
-
-    -- posicao real do NPC (procura no workspace uma vez; senao usa a tabela)
-    local QuestPosCache = {}
-    local function questPos(q)
-        if QuestPosCache[q] then return QuestPosCache[q] end
-        local pos = q.pos
-        local ok, npc = pcall(function() return workspace:FindFirstChild(q.npc, true) end)
-        if ok and npc then
-            local ok2, cf = pcall(function() return npc:GetPivot() end)
-            if ok2 and cf and cf.Position.Magnitude > 20 then pos = cf.Position end
-        end
-        QuestPosCache[q] = pos
-        return pos
-    end
-
     local function sendQ(name, idx)
         local cf = getCommF(); if not cf then return false end
         return pcall(function() return cf:InvokeServer("StartQuest", name, idx) end)
     end
+    
     local function abandonQ()
         local cf = getCommF(); if not cf then return end
         pcall(function() cf:InvokeServer("AbandonQuest") end)
     end
+    
     local function tp(pos)
         local h = getHRP()
         if h then h.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0)) end
     end
-    local function notify(title, msg, kind, dur)
-        if os.clock() - BF.LastNotify < 1.5 then return end
-        BF.LastNotify = os.clock()
-        pcall(function() Library:Notify({Title = title, Message = msg, Type = kind or "info", Duration = dur or 1.5}) end)
+
+    -- Fruit Sniper (com filtro de raridade)
+    local FRUIT_RARITY = {
+        { "rocket", "spin", "blade", "spring", "bomb", "smoke", "spike" },
+        { "flame", "falcon", "ice", "sand", "dark", "diamond" },
+        { "light", "rubber", "ghost", "magma" },
+        { "quake", "buddha", "love", "creation", "spider", "sound", "phoenix", "portal", "rumble", "pain", "blizzard" },
+        { "gravity", "mammoth", "t-rex", "dough", "shadow", "venom", "control", "gas", "spirit", "yeti", "leopard", "kitsune", "dragon" },
+    }
+    local RANK_NAMES = { "Common", "Uncommon", "Rare", "Legendary", "Mythical" }
+    local RANK_LABELS = { "Todas", "Uncommon+", "Rare+", "Legendary+", "Mythical" }
+    local RANK_MIN = { ["Todas"] = 0, ["Uncommon+"] = 2, ["Rare+"] = 3, ["Legendary+"] = 4, ["Mythical"] = 5 }
+
+    local function fruitRank(f)
+        local n = f.Name:lower()
+        for rank, list in ipairs(FRUIT_RARITY) do
+            for _, k in ipairs(list) do
+                local pat = "%f[%a]" .. k:gsub("%p", "%%%0") .. "%f[%A]"
+                if n:find(pat) then return rank end
+            end
+        end
+        return 0
     end
 
-    -- Haki de Armamento: so liga se ainda nao estiver ativo
-    local function ensureBuso()
-        local c = LP.Character
-        if c and not c:FindFirstChild("HasBuso") then
-            local cf = getCommF()
-            if cf then pcall(function() cf:InvokeServer("Buso") end) end
+    local function fruitPart(f)
+        return f:FindFirstChild("Handle") or f.PrimaryPart
+    end
+
+    local function getFruits()
+        local fruits = {}
+        for _, v in ipairs(workspace:GetChildren()) do
+            if (v:IsA("Tool") or v:IsA("Model")) and string.find(v.Name, "Fruit") and fruitPart(v) then
+                table.insert(fruits, v)
+            end
+        end
+        return fruits
+    end
+
+    local function fruitPasses(f)
+        local need = RANK_MIN[BF.FruitMinRank] or 0
+        return need == 0 or fruitRank(f) >= need
+    end
+
+    local function fruitSniper()
+        if not BF.AutoFruit then return end
+        for _, fruit in ipairs(getFruits()) do
+            if not BF.AutoFruit then return end
+            local part = fruitPart(fruit)
+            if part and fruit.Parent and fruitPasses(fruit) then
+                notify("Fruit Sniper", "A voar para " .. fruit.Name, "success", 3)
+                tp(part.Position + Vector3.new(0, 5, 0))
+                task.wait(1)
+            end
+        end
+    end
+
+    -- Promo Codes
+    local promoCodes = {
+        "SECRET_ADMIN", "ADMIN_TROLL", "KITTGAMING", "Sub2Fer999", "Enyu_is_Pro", 
+        "Magicbus", "JCWK", "Starcodeheo", "Bluxxy", "fudd10_v2", "SUB2GAMERROBOT_EXP1"
+    }
+    local function redeemAllCodes()
+        local remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+        if remotes and remotes:FindFirstChild("Redeem") then
+            for _, code in ipairs(promoCodes) do
+                pcall(function() remotes.Redeem:InvokeServer(code) end)
+                task.wait(0.5)
+            end
+            notify("Códigos", "Todos os códigos testados.", "success")
         end
     end
 
-    -- gasta pontos de status (ate 3 por chamada)
-    local function autoStats()
-        local ok, pts = pcall(function() return LP.Data.Points.Value end)
-        if not ok or type(pts) ~= "number" or pts <= 0 then return end
-        local cf = getCommF(); if not cf then return end
-        pcall(function() cf:InvokeServer("AddPoint", BF.StatName, math.min(pts, 3)) end)
-    end
-
-    -- reduz efeitos e sombras (particulas desligadas so voltam ao reentrar)
-    local function applyFPSBoost(on)
-        pcall(function()
-            local L = game:GetService("Lighting")
-            L.GlobalShadows = not on
-            if on then L.FogEnd = 9e9 end
-        end)
-        if not on then return end
-        task.spawn(function()
-            local n = 0
-            for _, v in ipairs(workspace:GetDescendants()) do
-                if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Smoke")
-                    or v:IsA("Fire") or v:IsA("Sparkles") then
-                    pcall(function() v.Enabled = false end)
-                end
-                n += 1
-                if n % 400 == 0 then task.wait() end
-            end
-        end)
-    end
-
-    -- Modo Seguro: com vida baixa sobe 120 studs e espera regenerar
-    local function safeRetreat()
-        local ch, h, hrp = GetChar(LP)
-        if not hrp or not h then return end
-        notify("Modo Seguro", "Vida baixa: recuando")
-        local up = hrp.Position + Vector3.new(0, 120, 0)
-        local t0 = os.clock()
-        while BF.Enabled and BF.SafeMode and h.Parent and h.Health > 0 and os.clock() - t0 < 25 do
-            hrp = getHRP(); if not hrp then break end
-            hrp.CFrame = CFrame.new(up)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            if h.Health / math.max(h.MaxHealth, 1) >= 0.8 then break end
-            task.wait(0.1)
+    -- Buy Random Fruit
+    local function buyRandomFruit()
+        local cf = getCommF()
+        if cf then
+            pcall(function()
+                local result = cf:InvokeServer("Cousin", "Buy")
+                notify("Giro de Fruta", tostring(result))
+            end)
         end
     end
 
-    -- WaterWalking: atributo do proprio jogo
-    local function applyWater(on)
-        local c = LP.Character
-        local found = false
-        for _, inst in ipairs({ c, LP }) do
-            if inst then
-                local ok, v = pcall(function() return inst:GetAttribute("WaterWalking") end)
-                if ok and v ~= nil then
-                    found = true
-                    if v ~= on then pcall(function() inst:SetAttribute("WaterWalking", on) end) end
-                end
+    -- Auto Chest (com cache, sem varrer o workspace a cada ciclo)
+    local ChestCache, ChestConns = {}, {}
+    local function chestAdd(o)
+        if o:IsA("BasePart") and o.Name:find("Chest") then ChestCache[o] = true end
+    end
+    local function chestCacheStart()
+        if #ChestConns > 0 then return end
+        for _, o in ipairs(workspace:GetDescendants()) do chestAdd(o) end
+        ChestConns[1] = workspace.DescendantAdded:Connect(chestAdd)
+        ChestConns[2] = workspace.DescendantRemoving:Connect(function(o) ChestCache[o] = nil end)
+    end
+    local function chestCacheStop()
+        for _, c in ipairs(ChestConns) do pcall(function() c:Disconnect() end) end
+        table.clear(ChestConns)
+        table.clear(ChestCache)
+    end
+    local function farmChests()
+        if not BF.AutoChest then return end
+        local h = getHRP(); if not h then return end
+        local best, bd
+        for o in pairs(ChestCache) do
+            if o.Parent then
+                local d = (o.Position - h.Position).Magnitude
+                if not bd or d < bd then best, bd = o, d end
+            else
+                ChestCache[o] = nil
             end
         end
-        if not found and c then pcall(function() c:SetAttribute("WaterWalking", on) end) end
+        if best then
+            tp(best.Position)
+            ChestCache[best] = nil
+            task.wait(0.4)
+        end
     end
 
-    -- NOCLIP continuo (o jogo reativa a colisao todo frame)
-    local NoclipSaved = {}
-    local noclipConn
-    local function startNoclip()
-        if noclipConn then return end
-        noclipConn = RunService.Stepped:Connect(function()
-            if not BF.Enabled then return end
-            local c = LP.Character; if not c then return end
-            for _, p in ipairs(c:GetDescendants()) do
-                if p:IsA("BasePart") then
-                    if NoclipSaved[p] == nil then NoclipSaved[p] = p.CanCollide end
-                    p.CanCollide = false
-                end
-            end
-        end)
-    end
-    local function stopNoclip()
-        if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
-        if not CFG.Noclip then
-            for p, v in pairs(NoclipSaved) do
-                if p and p.Parent then pcall(function() p.CanCollide = v end) end
-            end
+    -- Auto Skills
+    local function useSkills(force)
+        local keys = {}
+        if BF.AutoZ or force then table.insert(keys, Enum.KeyCode.Z) end
+        if BF.AutoX or force then table.insert(keys, Enum.KeyCode.X) end
+        if BF.AutoC or force then table.insert(keys, Enum.KeyCode.C) end
+        if BF.AutoV or force then table.insert(keys, Enum.KeyCode.V) end
+
+        for _, key in ipairs(keys) do
+            pcall(function()
+                VIM:SendKeyEvent(true, key, false, game)
+                task.wait(0.05)
+                VIM:SendKeyEvent(false, key, false, game)
+            end)
         end
-        table.clear(NoclipSaved)
     end
 
     --================================================--
-    -- SPAWNS (_WorldOrigin.EnemySpawns + ReplicatedStorage)
-    --================================================--
-    local SpawnsByMob = {}   -- ["bandit"] = { {pos, level, boss} }
-    local SpawnNames = {}
-    local JUNK = { part = true, humanoidrootpart = true, model = true, spawn = true }
-
-    local function addSpawn(mob, lv, boss, pos)
-        local k = mob:lower()
-        SpawnsByMob[k] = SpawnsByMob[k] or {}
-        for _, sp in ipairs(SpawnsByMob[k]) do
-            if (sp.pos - pos).Magnitude < 5 then return end
-        end
-        SpawnNames[k] = SpawnNames[k] or mob
-        table.insert(SpawnsByMob[k], { pos = pos, level = lv or 0, boss = boss })
-    end
-    local function pivotPos(inst)
-        local ok, cf = pcall(function() return inst:GetPivot() end)
-        return ok and cf and cf.Position or nil
-    end
-
-    local function scanSpawns()
-        table.clear(SpawnsByMob); table.clear(SpawnNames)
-
-        local origin = workspace:FindFirstChild("_WorldOrigin")
-        local folder = origin and origin:FindFirstChild("EnemySpawns")
-        if folder then
-            for _, sp in ipairs(folder:GetChildren()) do
-                local mob, lv, boss = parseName(sp.Name)
-                local pos = mob and pivotPos(sp)
-                if pos then addSpawn(mob, lv, boss, pos) end
-            end
-        end
-
-        local rs = game:GetService("ReplicatedStorage"):FindFirstChild("FortBuilderReplicatedSpawnPositionsFolder")
-        if rs then
-            for _, sp in ipairs(rs:GetChildren()) do
-                local name = sp.Name
-                if not tonumber(name) and not JUNK[name:lower()] then
-                    local mob = parseName(name) or name
-                    local pos = pivotPos(sp)
-                    if pos then addSpawn(mob, nil, BOSS_NAMES[mob:lower()] == true, pos) end
-                end
-            end
-        end
-        return next(SpawnsByMob) ~= nil
-    end
-
-    -- spawns do mob (ou de um alias)
-    local function spawnsFor(mobName)
-        local l = SpawnsByMob[mobName:lower()]
-        if l and #l > 0 then return l end
-        for _, a in ipairs(ALIASES[mobName:lower()] or {}) do
-            local l2 = SpawnsByMob[a]
-            if l2 and #l2 > 0 then return l2 end
-        end
-        return nil
-    end
-
-    local SpawnIdx = {}
-    local function pickSpawn(mobName, ref)
-        local list = spawnsFor(mobName)
-        if not list then return nil end
-        local sorted = {}
-        for _, sp in ipairs(list) do table.insert(sorted, sp) end
-        table.sort(sorted, function(x, y) return (x.pos - ref).Magnitude < (y.pos - ref).Magnitude end)
-        local k = mobName:lower()
-        local i = ((SpawnIdx[k] or 0) % #sorted) + 1
-        return sorted[i], k
-    end
-
-    local function buildMobLists()
-        local normals, bosses = {}, {}
-        for k, list in pairs(SpawnsByMob) do
-            local entry = { name = SpawnNames[k], level = list[1].level }
-            if list[1].boss then table.insert(bosses, entry) else table.insert(normals, entry) end
-        end
-        local function cmp(a, b)
-            if a.level ~= b.level then return a.level < b.level end
-            return a.name < b.name
-        end
-        table.sort(normals, cmp); table.sort(bosses, cmp)
-        local nOpts, bOpts, nMap, bMap = { "Nenhum" }, { "Nenhum" }, {}, {}
-        for _, e in ipairs(normals) do
-            local lbl = e.name..(e.level > 0 and (" [Lv. "..e.level.."]") or "")
-            table.insert(nOpts, lbl); nMap[lbl] = e.name
-        end
-        for _, e in ipairs(bosses) do
-            local lbl = e.name..(e.level > 0 and (" [Lv. "..e.level.."]") or "")
-            table.insert(bOpts, lbl); bMap[lbl] = e.name
-        end
-        return nOpts, bOpts, nMap, bMap
-    end
-
-    --================================================--
-    -- INIMIGOS
-    --================================================--
-    local function baseName(n)
-        local b = parseName(n)
-        return (b or n):lower()
-    end
-
-    -- mob so conta se nao estiver "estacionado" (origem / longe de qualquer spawn)
-    local function validPos(mobName, pos)
-        if pos.Magnitude < 20 then return false end
-        local me = getHRP()
-        if me and (me.Position - pos).Magnitude < 300 then return true end
-        local list = spawnsFor(mobName)
-        if not list then return true end
-        for _, sp in ipairs(list) do
-            if (sp.pos - pos).Magnitude < 300 then return true end
-        end
-        return false
-    end
-
-    local function targetSets(mobName)
-        local nset, sset = {}, {}
-        local function add(n)
-            local x = norm(n); nset[x] = true; sset[stemOf(x)] = true
-        end
-        add(mobName)
-        for _, a in ipairs(ALIASES[mobName:lower()] or {}) do add(a) end
-        return nset, sset
-    end
-
-    local function getMobs(mobName)
-        local exact, fuzzy = {}, {}
-        local enemies = workspace:FindFirstChild("Enemies")
-        if not enemies or not mobName then return exact end
-        local me = getHRP()
-        local nset, sset = targetSets(mobName)
-        for _, m in ipairs(enemies:GetChildren()) do
-            local hum = m:FindFirstChildOfClass("Humanoid")
-            local root = getRoot(m)
-            if hum and hum.Health > 0 and root and validPos(mobName, root.Position) then
-                local n = norm(m.Name); local s = stemOf(n)
-                if nset[n] or sset[s] then
-                    table.insert(exact, m)
-                elseif #s >= 4 and me and (root.Position - me.Position).Magnitude < 250 then
-                    for st in pairs(sset) do
-                        if #st >= 4 and (s:find(st, 1, true) or st:find(s, 1, true)) then
-                            table.insert(fuzzy, m); break
-                        end
-                    end
-                end
-            end
-        end
-        if #exact > 0 then return exact end
-        return fuzzy
-    end
-
-    local function nearestAnyEnemy(from, radius)
-        local enemies = workspace:FindFirstChild("Enemies")
-        if not enemies then return nil end
-        local best, bestD
-        for _, m in ipairs(enemies:GetChildren()) do
-            local hum = m:FindFirstChildOfClass("Humanoid")
-            local root = getRoot(m)
-            if hum and hum.Health > 0 and root and root.Position.Magnitude > 20 then
-                local d = (root.Position - from).Magnitude
-                if d <= radius and (not bestD or d < bestD) then best, bestD = m, d end
-            end
-        end
-        return best
-    end
-
-    --================================================--
-    -- ARMA / ATAQUE
+    -- SISTEMAS DE MOVIMENTO E COMBATE PRO
     --================================================--
     local function findTool(tip)
         local c = LP.Character; if not c then return nil end
@@ -503,9 +420,10 @@ return function(ctx)
         end
         return nil
     end
-    local function equip()
+
+    local function equip(tipOverride)
         local c = LP.Character; if not c then return nil end
-        local t = findTool(BF.WeaponType)
+        local t = findTool(tipOverride or BF.WeaponType)
         if not t then
             t = c:FindFirstChildOfClass("Tool")
             if not t then
@@ -521,7 +439,7 @@ return function(ctx)
         end
         return t
     end
-    -- clique real no centro da tela (o hub nao deve cobrir esse ponto)
+
     local function atk(t)
         if t then pcall(function() t:Activate() end) end
         local ok = pcall(function()
@@ -534,9 +452,6 @@ return function(ctx)
         if not ok and mouse1click then pcall(mouse1click) end
     end
 
-    --================================================--
-    -- MOVIMENTO
-    --================================================--
     local function setNoCollide(ch, saved)
         for _, p in ipairs(ch:GetDescendants()) do
             if p:IsA("BasePart") then
@@ -545,101 +460,495 @@ return function(ctx)
             end
         end
     end
+    
     local function restoreCollide(saved)
-        if CFG.Noclip or noclipConn then return end
+        if CFG.Noclip then return end
         for p, v in pairs(saved) do
             if p and p.Parent then pcall(function() p.CanCollide = v end) end
         end
     end
 
+    -- O voo precisa continuar valendo quando raid, sea events ou teleporte usam flyTo sem o farm ligado
+    local Modes = {}
+    BF.Modes = {}
+    local function anyMode()
+        for _, v in pairs(BF.Modes) do
+            if v then return true end
+        end
+        return false
+    end
+    local function farmOn()
+        return (BF.Enabled or anyMode()) and true or false
+    end
+    local function flyActive()
+        return (BF.Enabled or BF.AutoRaid or BF.SeaEvents or BF.Teleporting or anyMode()) and true or false
+    end
+
+    -- TWEEN FLY PRO (Substitui AssemblyLinearVelocity)
     local function flyTo(target, speed, timeout)
         local ch, h, hrp = GetChar(LP)
         if not hrp or not h then return false end
 
         local dist = (target - hrp.Position).Magnitude
-        local autoTO = math.clamp(dist / math.max(speed, 20) * 2.5, 10, 120)
-        timeout = math.max(timeout or 0, autoTO)
+        local tweenTime = dist / math.max(speed, 50)
+        timeout = math.max(timeout or 0, tweenTime + 2)
 
         FlyFarmMoving = true
         local oAR, oPS = h.AutoRotate, h.PlatformStand
         local saved = {}
-        local reached = false
 
         local ok, err = pcall(function()
-            h.PlatformStand = true; h.AutoRotate = false
+            h.PlatformStand = true
+            h.AutoRotate = false
             setNoCollide(ch, saved)
+
+            local tweenInfo = TweenInfo.new(tweenTime, Enum.EasingStyle.Linear)
+            local tween = TweenService:Create(hrp, tweenInfo, {CFrame = CFrame.new(target)})
+            tween:Play()
+
             local deadline = os.clock() + timeout
-            while BF.Enabled and os.clock() < deadline do
-                if not hrp.Parent then break end
-                local mp = hrp.Position
-                local d = target - mp
-                if d.Magnitude < 4 then reached = true; break end
-                hrp.AssemblyLinearVelocity = d.Unit * speed
-                local fd = Vector3.new(d.X, 0, d.Z)
-                if fd.Magnitude > 0.1 then hrp.CFrame = CFrame.new(mp, mp + fd.Unit) end
-                task.wait(0.03)
+            while flyActive() and tween.PlaybackState == Enum.PlaybackState.Playing and os.clock() < deadline do
+                task.wait(0.1)
             end
+            tween:Cancel()
         end)
 
-        -- limpeza sempre executa
         if hrp and hrp.Parent then hrp.AssemblyLinearVelocity = Vector3.zero end
         if h and h.Parent then h.PlatformStand = oPS; h.AutoRotate = oAR end
         restoreCollide(saved)
         FlyFarmMoving = false
-        if not ok then warn("flyTo:", err) end
-        return reached
+        
+        return (hrp.Position - target).Magnitude < 10
     end
 
     local function goTo(pos, timeout)
-        if BF.FlyFarm then return flyTo(pos, BF.FlySpeed, timeout or 20) end
+        if BF.FlyFarm then return flyTo(pos, BF.FlySpeed, timeout) end
         tp(pos); task.wait(0.3); return true
     end
 
-    local function travelTimeout(from, to, cap)
-        local dist = (from - to).Magnitude
-        return math.clamp(dist / math.max(BF.FlySpeed, 20) + 5, 10, cap or 60)
+    --================================================--
+    -- EXTRAS v15
+    --================================================--
+    local Players = game:GetService("Players")
+    local TeleportService = game:GetService("TeleportService")
+    local Lighting = game:GetService("Lighting")
+
+    -- loops sem duplicar (ligar/desligar rapido nao cria 2 threads)
+    local running = {}
+    local function spawnOnce(name, fn)
+        if running[name] then return end
+        running[name] = true
+        task.spawn(function()
+            local ok, err = pcall(fn)
+            if not ok then warn(name .. ":", err) end
+            running[name] = nil
+        end)
+    end
+    local function loopFlag(name, key, fn, delay)
+        spawnOnce(name, function()
+            while BF[key] do
+                local ok, err = pcall(fn)
+                if not ok then warn(name .. ":", err) end
+                task.wait(delay or 0.5)
+            end
+        end)
+    end
+
+    local function currentTip()
+        return BF.Mastery and BF.MasteryWeapon or BF.WeaponType
+    end
+
+    -- Kill Aura (loop proprio: funciona com o Auto Farm desligado)
+    local function killAuraTick()
+        if not BF.KillAura then return end
+        local hrp = getHRP()
+        if not hrp then return end
+        local enemies = workspace:FindFirstChild("Enemies")
+        if not enemies then return end
+        for _, mob in ipairs(enemies:GetChildren()) do
+            local mobHrp = getRoot(mob)
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            if mobHrp and hum and hum.Health > 0 and (hrp.Position - mobHrp.Position).Magnitude <= BF.AuraRadius then
+                pcall(function() atk(equip(currentTip())) end)
+                return
+            end
+        end
+    end
+
+    -- Safe Mode: com pouca vida sobe, fica ancorado ate regenerar e volta
+    local function safeRetreat()
+        if not BF.SafeMode then return false end
+        local _, h, hrp = GetChar(LP)
+        if not h or not hrp or h.Health <= 0 or h.MaxHealth <= 0 then return false end
+        if (h.Health / h.MaxHealth) * 100 >= BF.SafeHP then return false end
+        notify("Safe Mode", "Vida baixa, a recuar para regenerar", "warn", 3)
+        FlyFarmMoving = true
+        flyTo(hrp.Position + Vector3.new(0, 300, 0), BF.FlySpeed, 10)
+        FlyFarmMoving = true
+        local _, h2, hrp2 = GetChar(LP)
+        if hrp2 and h2 then
+            pcall(function() hrp2.Anchored = true end)
+            local t0 = os.clock()
+            while flyActive() and os.clock() - t0 < 30 and h2.Parent and h2.Health > 0
+                and (h2.Health / h2.MaxHealth) < 0.85 do
+                task.wait(0.5)
+            end
+            pcall(function() hrp2.Anchored = false end)
+        end
+        FlyFarmMoving = false
+        return true
+    end
+
+    -- Auto Mastery: usa so a arma escolhida com Z/X/C/V ate bater a meta
+    local lastMastery = 0
+    local function masteryCheck()
+        if not BF.Mastery or os.clock() - lastMastery < 2 then return end
+        lastMastery = os.clock()
+        local t = findTool(BF.MasteryWeapon)
+        local lv = t and t:FindFirstChild("Level")
+        if lv and type(lv.Value) == "number" and lv.Value >= BF.MasteryTarget then
+            BF.Mastery = false
+            notify("Mastery", "Meta atingida (" .. tostring(lv.Value) .. ")", "success", 4)
+        end
+    end
+
+    -- nomes de mobs com aliases (usa a tabela ALIASES)
+    local function nameMatches(instName, target)
+        local na = norm(instName)
+        local list = { target }
+        for _, a in ipairs(ALIASES[target:lower()] or {}) do list[#list + 1] = a end
+        for _, t in ipairs(list) do
+            local nt = norm(t)
+            if na == nt or stemOf(na) == stemOf(nt) then return true end
+        end
+        return false
+    end
+
+    local function bossQuestOf(name)
+        for _, q in ipairs(QUESTS) do
+            if q.sea == Sea and q.mob:lower() == name:lower() then return q end
+        end
+        return nil
+    end
+
+    -- FPS Boost (reversivel)
+    local FPS = { orig = {}, conn = nil, quality = nil, shadows = nil }
+    local function fpsApply(o)
+        if FPS.orig[o] then return end
+        pcall(function()
+            if LP.Character and o:IsDescendantOf(LP.Character) then return end
+            if o:IsA("ParticleEmitter") or o:IsA("Trail") or o:IsA("Smoke") or o:IsA("Fire")
+                or o:IsA("Sparkles") or o:IsA("PostEffect") then
+                FPS.orig[o] = { "Enabled", o.Enabled }
+                o.Enabled = false
+            elseif o:IsA("Decal") or o:IsA("Texture") then
+                FPS.orig[o] = { "Transparency", o.Transparency }
+                o.Transparency = 1
+            elseif o:IsA("BasePart") then
+                FPS.orig[o] = { "Material", o.Material }
+                o.Material = Enum.Material.SmoothPlastic
+            end
+        end)
+    end
+    local function fpsBoost(on)
+        if on then
+            if FPS.conn then return end
+            FPS.shadows = Lighting.GlobalShadows
+            pcall(function() Lighting.GlobalShadows = false end)
+            pcall(function()
+                FPS.quality = settings().Rendering.QualityLevel
+                settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+            end)
+            FPS.conn = workspace.DescendantAdded:Connect(fpsApply)
+            task.spawn(function()
+                local n = 0
+                for _, o in ipairs(workspace:GetDescendants()) do
+                    if not FPS.conn then return end
+                    fpsApply(o)
+                    n = n + 1
+                    if n % 400 == 0 then task.wait() end
+                end
+                for _, o in ipairs(Lighting:GetDescendants()) do fpsApply(o) end
+            end)
+        else
+            if FPS.conn then FPS.conn:Disconnect(); FPS.conn = nil end
+            for o, d in pairs(FPS.orig) do pcall(function() o[d[1]] = d[2] end) end
+            FPS.orig = {}
+            pcall(function() if FPS.shadows ~= nil then Lighting.GlobalShadows = FPS.shadows end end)
+            pcall(function() if FPS.quality then settings().Rendering.QualityLevel = FPS.quality end end)
+        end
+    end
+
+    -- ESP generico (players e frutas)
+    local function espLoop(key, color, collect)
+        if not Drawing then
+            notify("ESP", "Drawing API indisponivel no teu executor", "warn", 3)
+            return
+        end
+        local objs = {}
+        while BF[key] do
+            local cam = workspace.CurrentCamera
+            local me = getHRP()
+            local seen = {}
+            local ok, list = pcall(collect)
+            for _, it in ipairs(ok and list or {}) do
+                seen[it.key] = true
+                local t = objs[it.key]
+                if not t then
+                    t = Drawing.new("Text")
+                    t.Size = 18; t.Color = color; t.Center = true; t.Outline = true
+                    objs[it.key] = t
+                end
+                local pos, on = cam:WorldToViewportPoint(it.part.Position)
+                if on and pos.Z > 0 then
+                    local d = me and (me.Position - it.part.Position).Magnitude or 0
+                    t.Position = Vector2.new(pos.X, pos.Y - 20)
+                    t.Text = string.format("%s [%.0fm]", it.name, d)
+                    t.Visible = true
+                else
+                    t.Visible = false
+                end
+            end
+            for k, t in pairs(objs) do
+                if not seen[k] then pcall(function() t:Remove() end); objs[k] = nil end
+            end
+            task.wait(0.05)
+        end
+        for _, t in pairs(objs) do pcall(function() t:Remove() end) end
+    end
+
+    local function collectPlayers()
+        local out = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            local c = p ~= LP and p.Character
+            local r = c and c:FindFirstChild("HumanoidRootPart")
+            if r then out[#out + 1] = { key = p, part = r, name = p.Name } end
+        end
+        return out
+    end
+
+    local function collectFruits()
+        local out = {}
+        for _, f in ipairs(getFruits()) do
+            local p = fruitPart(f)
+            if p then out[#out + 1] = { key = f, part = p, name = f.Name } end
+        end
+        return out
+    end
+
+    -- Webhook Discord (usa o executor: request / http_request)
+    local httpReq = (syn and syn.request) or (http and http.request) or http_request or request
+    local function sendWebhook(msg)
+        local url = BF.Webhook
+        if not url or url == "" or not httpReq then return false end
+        return (pcall(function()
+            httpReq({
+                Url = url, Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = HttpService:JSONEncode({ content = msg }),
+            })
+        end))
+    end
+
+    local announced = setmetatable({}, { __mode = "k" })
+    local function fruitWatch()
+        for _, f in ipairs(getFruits()) do
+            if not announced[f] and fruitPasses(f) then
+                announced[f] = true
+                local r = fruitRank(f)
+                local msg = string.format("Fruta no chao: %s (%s) | Servidor: %s | Place: %s",
+                    f.Name, RANK_NAMES[r] or "?", tostring(game.JobId), tostring(game.PlaceId))
+                notify("Fruit Watch", f.Name, "success", 4)
+                sendWebhook(msg)
+            end
+        end
+    end
+
+    -- Auto Store Fruit (guarda as frutas do Backpack no inventario)
+    local function storeFruits()
+        local usingFruit = BF.Enabled and (BF.WeaponType == "Blox Fruit" or (BF.Mastery and BF.MasteryWeapon == "Blox Fruit"))
+        if usingFruit then return end
+        local cf = getCommF(); if not cf then return end
+        for _, t in ipairs(LP.Backpack:GetChildren()) do
+            if t:IsA("Tool") and t.ToolTip == "Blox Fruit" then
+                local nm = t:GetAttribute("OriginalName") or t.Name
+                local ok, res = pcall(function() return cf:InvokeServer("StoreFruit", nm, t) end)
+                if ok then notify("Auto Store", tostring(nm) .. " -> " .. tostring(res), "success", 2) end
+                task.wait(0.5)
+            end
+        end
+    end
+
+    -- Auto Stats
+    local function autoStats()
+        local pts = 0
+        pcall(function() pts = LP.Data.Points.Value end)
+        if pts and pts > 0 then
+            local cf = getCommF(); if not cf then return end
+            pcall(function() cf:InvokeServer("AddPoint", BF.StatName, pts) end)
+        end
+    end
+
+    -- Server Hop
+    local function httpGet(url)
+        if httpReq then
+            local r = httpReq({ Url = url, Method = "GET" })
+            return r and r.Body
+        end
+        return game:HttpGet(url)
+    end
+
+    local hopping = false
+    local function serverHop(mode)
+        if hopping then return end
+        hopping = true
+        task.delay(20, function() hopping = false end)
+        local ok, err = pcall(function()
+            local cursor, found = "", {}
+            for _ = 1, 3 do
+                local url = string.format(
+                    "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100%s",
+                    game.PlaceId, cursor ~= "" and ("&cursor=" .. cursor) or "")
+                local data = HttpService:JSONDecode(httpGet(url))
+                for _, s in ipairs(data.data or {}) do
+                    if s.id ~= game.JobId and s.playing and s.maxPlayers and s.playing <= s.maxPlayers - 2 then
+                        found[#found + 1] = s
+                    end
+                end
+                cursor = data.nextPageCursor
+                if not cursor then break end
+            end
+            if #found == 0 then error("nenhum servidor disponivel") end
+            local pick
+            if mode == "most" then
+                table.sort(found, function(a, b) return a.playing > b.playing end)
+                pick = found[1]
+            elseif mode == "fewest" then
+                table.sort(found, function(a, b) return a.playing < b.playing end)
+                pick = found[1]
+            elseif mode == "ping" then
+                table.sort(found, function(a, b) return (a.ping or 9e9) < (b.ping or 9e9) end)
+                pick = found[1]
+            else
+                pick = found[math.random(#found)]
+            end
+            notify("Server Hop", "A trocar de servidor...", "info", 3)
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, pick.id, LP)
+        end)
+        if not ok then
+            warn("serverHop:", err)
+            notify("Server Hop", "Falhou: " .. tostring(err), "warn", 3)
+            hopping = false
+        end
+    end
+
+    local function lowPopHop()
+        if #Players:GetPlayers() < BF.HopMinPlayers then serverHop("most") end
+    end
+
+    local loadedAt = os.clock()
+    local function fruitHuntHop()
+        if os.clock() - loadedAt < 10 then return end
+        for _, f in ipairs(getFruits()) do
+            if fruitPasses(f) then task.wait(10); return end
+        end
+        serverHop("random")
+    end
+
+    -- Teleporte por ilha (usa os NPCs de quest do mar atual) e entre mares
+    local ISLAND_LIST, ISLAND_POS = {}, {}
+    for _, q in ipairs(QUESTS) do
+        if q.sea == Sea and q.index == 1 then
+            local nm = q.npc:gsub("%s*Quest%s*%d*%s*Giver", "")
+            local label = string.format("%s (Lv %d)", nm, q.minLevel)
+            if not ISLAND_POS[label] then
+                ISLAND_POS[label] = q.pos
+                ISLAND_LIST[#ISLAND_LIST + 1] = label
+            end
+        end
+    end
+    BF.TPIsland = ISLAND_LIST[1]
+
+    local function tpIsland()
+        local pos = ISLAND_POS[BF.TPIsland or ""]
+        if not pos then notify("Teleporte", "Escolhe uma ilha", "warn"); return end
+        BF.Teleporting = true
+        goTo(pos + Vector3.new(0, 5, 0), 180)
+        BF.Teleporting = false
+        notify("Teleporte", "Chegaste", "success")
+    end
+
+    local function travelSea(cmd)
+        local cf = getCommF(); if not cf then return end
+        local ok, res = pcall(function() return cf:InvokeServer(cmd) end)
+        notify("Viagem", ok and tostring(res) or "falhou", ok and "info" or "warn", 3)
+    end
+
+    -- Awakening / Race V4 (melhor esforco: remotes podem mudar com updates do jogo)
+    local function awakenCheck()
+        local cf = getCommF(); if not cf then return end
+        local ok, res = pcall(function() return cf:InvokeServer("Awakener", "Check") end)
+        notify("Awakening", ok and tostring(res) or "falhou", "info", 3)
+    end
+    local function awakenDo()
+        local cf = getCommF(); if not cf then return end
+        local ok, res = pcall(function() return cf:InvokeServer("Awakener", "Awaken") end)
+        if ok then notify("Awakening", tostring(res), "info", 3) end
+    end
+    local function raceV4Check()
+        local cf = getCommF(); if not cf then return end
+        local ok, res = pcall(function() return cf:InvokeServer("RaceV4Progress", "Check") end)
+        notify("Race V4", ok and tostring(res) or "falhou", "info", 4)
     end
 
     --================================================--
-    -- FARM
+    -- LOGICA DE QUEST (CORRIGIDA) E FARM
     --================================================--
-    local function resolveTarget()
-        if BF.BossMob then return BF.BossMob, nil end
-        if BF.FreeMob then return BF.FreeMob, nil end
-        local l = getLvl(); if not l then return nil end
-        local q = BF.SelectedQuest or pickQ(l)
-        if not q then return nil end
-        return q.mob, q
+    local function pickQ(l)
+        local best
+        for _, q in ipairs(QUESTS) do
+            if l >= q.minLevel and q.sea == Sea and not BOSS_NAMES[q.mob:lower()] then best = q end
+        end
+        return best
     end
 
-    -- garante a quest certa ativa. true = pode atacar
+    local QuestPosCache = {}
+    local function questPos(q)
+        if QuestPosCache[q] then return QuestPosCache[q] end
+        local pos = q.pos
+        local ok, npc = pcall(function() return workspace:FindFirstChild(q.npc, true) end)
+        if ok and npc then
+            local ok2, cf = pcall(function() return npc:GetPivot() end)
+            if ok2 and cf and cf.Position.Magnitude > 20 then pos = cf.Position end
+        end
+        QuestPosCache[q] = pos
+        return pos
+    end
+
     local function ensureQuest(q)
         local key = q.quest .. "#" .. q.index
         if hasQ() then
-            if questMatches(q) then return true end
+            if true then return true end -- ignorando locale match
             if BF.QuestCooldown > os.clock() then return false end
             abandonQ()
             BF.QuestCooldown = os.clock() + 1.5
             return false
         end
-        -- recusada pelo servidor: farma sem quest e volta ao NPC depois de um tempo
-        local needLvl = BF.BlockedLvl[key]
-        if needLvl then
-            if (getLvl() or 0) >= needLvl then BF.BlockedLvl[key] = nil else return "noquest" end
-        end
+
         local untilT = BF.BlockedUntil[key]
         if untilT then
-            if os.clock() < untilT then return "noquest" end
+            if os.clock() < untilT then return false end
             BF.BlockedUntil[key] = nil
         end
+        
         if BF.QuestCooldown > os.clock() then return false end
         local h = getHRP(); if not h then return false end
 
         local qp = questPos(q)
         if (h.Position - qp).Magnitude > 15 then
-            notify("Auto Farm", "Indo ate "..q.npc)
+            notify("Auto Farm", "A ir ate "..q.npc)
             local dest = qp + Vector3.new(0, 5, 0)
-            goTo(dest, travelTimeout(h.Position, dest, 90))
+            goTo(dest, 90)
             task.wait(0.15)
             h = getHRP()
             if not h or (h.Position - qp).Magnitude > 25 then
@@ -648,53 +957,45 @@ return function(ctx)
             end
         end
 
-        -- StartQuest devolve: 0 = aceita | 1 = erro | 2 = ja concluida | N>2 = nivel exigido
         local okQ, res = sendQ(q.quest, q.index)
         BF.LastQuestRes = tostring(okQ) .. " / " .. tostring(res)
         task.wait(0.6)
         BF.QuestCooldown = os.clock() + 0.8
 
         if okQ and res == 0 then
-            -- Atualizado: Aguarda ate 5 segundos para a interface de quest atualizar
             for _ = 1, 20 do
-                if hasQ() then break end
+                if hasQ() then return true end
                 task.wait(0.25)
             end
-            if hasQ() then return true end
-            -- servidor aceitou mas a UI nao mostrou: bate nos mobs assim mesmo
-            BF.BlockedUntil[key] = os.clock() + 120 -- Atualizado: Delay ampliado para 120s
-            return "noquest"
-        end
-        if okQ and res == 2 then
-            BF.BlockedUntil[key] = os.clock() + 300   -- tenta de novo em 5 min
-            notify("Auto Farm", "Quest ja concluida: farmando sem quest")
-            return "noquest"
-        end
-        if okQ and type(res) == "number" and res > 2 then
-            BF.BlockedLvl[key] = res
-            notify("Auto Farm", "Quest pede nivel " .. res .. ": farmando sem quest")
-            return "noquest"
+            BF.BlockedUntil[key] = os.clock() + 3
+            return false
         end
 
-        -- codigo 1 ou resposta inesperada: nao deu, vai direto aos mobs
-        BF.BlockedUntil[key] = os.clock() + 90        -- volta ao NPC em 90 s
-        notify("Auto Farm", "Quest nao aceita (codigo " .. tostring(res) .. "): indo direto aos mobs")
-        return "noquest"
+        if okQ and type(res) == "number" and res > 2 then
+            q.minLevel = res 
+            return false
+        end
+
+        BF.BlockedUntil[key] = os.clock() + 3 
+        return false
     end
 
     local function bringNearby(mobName, center)
-        for _, m in ipairs(getMobs(mobName)) do
-            local mh = getRoot(m)
-            if mh and (mh.Position - center).Magnitude < 60 then
-                pcall(function()
-                    mh.CFrame = CFrame.new(center + Vector3.new(0, -2, 0))
-                    mh.AssemblyLinearVelocity = Vector3.zero
-                end)
+        local enemies = workspace:FindFirstChild("Enemies")
+        if not enemies then return end
+        for _, m in ipairs(enemies:GetChildren()) do
+            if nameMatches(m.Name, mobName) then
+                local mh = getRoot(m)
+                if mh and (mh.Position - center).Magnitude < 60 then
+                    pcall(function()
+                        mh.CFrame = CFrame.new(center + Vector3.new(0, -2, 0))
+                        mh.AssemblyLinearVelocity = Vector3.zero
+                    end)
+                end
             end
         end
     end
 
-    -- fica acima do mob, olhando para ele, batendo ate morrer
     local function engage(mob, q)
         local ch, h = GetChar(LP)
         if not ch or not h then return end
@@ -702,28 +1003,24 @@ return function(ctx)
         pcall(function()
             local t0 = os.clock()
             local nextAtk = 0
-            -- SUBSTITUIDO: Tempo limite de combate alterado para 40 segundos
-            while BF.Enabled and os.clock() - t0 < 40 do
+            while farmOn() and os.clock() - t0 < 40 do
                 local mh = getRoot(mob)
                 local mhum = mob:FindFirstChildOfClass("Humanoid")
                 if not mob.Parent or not mh or not mhum or mhum.Health <= 0 then break end
                 local hrp = getHRP()
                 if not hrp or h.Health <= 0 then break end
                 if q and not hasQ() then break end
-
-                if BF.SafeMode and h.MaxHealth > 0 and h.Health / h.MaxHealth < BF.SafeHP / 100 then
-                    safeRetreat()
-                    break
-                end
+                if safeRetreat() then break end
 
                 local pos = mh.Position + Vector3.new(0, BF.Height, 2)
                 hrp.CFrame = CFrame.lookAt(pos, mh.Position)
-                hrp.AssemblyLinearVelocity = Vector3.zero
-                hrp.AssemblyAngularVelocity = Vector3.zero
+                
                 if BF.BringMobs then bringNearby(mob.Name:match("^(.-)%s*%[") or mob.Name, mh.Position) end
 
+                useSkills(BF.Mastery)
+
                 if os.clock() >= nextAtk then
-                    atk(equip())
+                    atk(equip(currentTip()))
                     nextAtk = os.clock() + (BF.FastAttack and 0.08 or 0.2)
                 end
                 task.wait(0.03)
@@ -732,49 +1029,35 @@ return function(ctx)
         FlyFarmMoving = false
     end
 
+    local function getMobs(mobName)
+        local exact = {}
+        local enemies = workspace:FindFirstChild("Enemies")
+        if not enemies or not mobName then return exact end
+        for _, m in ipairs(enemies:GetChildren()) do
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            local root = getRoot(m)
+            if hum and hum.Health > 0 and root then
+                if nameMatches(m.Name, mobName) then
+                    table.insert(exact, m)
+                end
+            end
+        end
+        return exact
+    end
+
     local function huntMob(mobName, fallbackPos)
         local h = getHRP(); if not h then return end
         local mobs = getMobs(mobName)
 
         if #mobs == 0 then
-            -- 1) inimigo vivo por perto (raio curto se ha spawns; amplo se nao ha)
-            local radii = spawnsFor(mobName) and { 70 } or { 100, 200, 400, 800 }
-            for _, r in ipairs(radii) do
-                local near = nearestAnyEnemy(h.Position, r)
-                if near then return near end
+            local dest = fallbackPos and (fallbackPos + Vector3.new(0, 5, 0)) or h.Position
+            if (h.Position - dest).Magnitude > 25 then
+                notify("Auto Farm", "Procurando "..mobName)
+                goTo(dest, 60)
+            else
+                task.wait(3)
             end
-
-            -- 2) spawn conhecido (do mais perto do NPC ao mais longe)
-            local ref = fallbackPos or h.Position
-            local sp, key = pickSpawn(mobName, ref)
-            local dest
-
-            if sp then
-                dest = sp.pos + Vector3.new(0, 10, 0)
-            elseif fallbackPos then
-                -- 3) sem spawns: orbita em volta do NPC
-                if not BF.OrbitStart or BF.OrbitStart == 0
-                    or (BF.OrbitAnchor and (BF.OrbitAnchor - fallbackPos).Magnitude > 50) then
-                    BF.OrbitStart = os.clock()
-                    BF.OrbitAnchor = fallbackPos
-                end
-                local elapsed = os.clock() - BF.OrbitStart
-                local angle = (elapsed * 0.9) % (math.pi * 2)
-                local radius = 100 + ((elapsed * 5) % 150)
-                dest = fallbackPos + Vector3.new(math.cos(angle) * radius, 5, math.sin(angle) * radius)
-            end
-
-            if dest then
-                if (h.Position - dest).Magnitude > 25 then
-                    notify("Auto Farm", "Procurando "..mobName)
-                    goTo(dest, travelTimeout(h.Position, dest, 60))
-                else
-                    -- SUBSTITUIDO: Aumentado para 15 segundos para aguardar o respawn
-                    task.wait(15)
-                    if key then SpawnIdx[key] = (SpawnIdx[key] or 0) + 1 end
-                end
-            end
-            return
+            return nil
         end
 
         table.sort(mobs, function(a, b)
@@ -782,43 +1065,42 @@ return function(ctx)
             if not ah or not bh then return false end
             return (h.Position - ah.Position).Magnitude < (h.Position - bh.Position).Magnitude
         end)
+        
         local mob = mobs[1]
         local mh = getRoot(mob)
         if not mh then return end
 
-        BF.OrbitStart = 0
-        BF.OrbitAnchor = nil
-
         if (h.Position - mh.Position).Magnitude > 20 then
             local dest = mh.Position + Vector3.new(0, BF.Height, 0)
-            goTo(dest, travelTimeout(h.Position, dest, 60))
+            goTo(dest, 60)
         end
         return mob
     end
 
     local function farmTick()
         if not BF.Enabled then return end
+        if anyMode() then task.wait(0.5); return end -- os modos extra tem prioridade sobre o farm de level
         if not getHRP() then return end
-        local mobName, q = resolveTarget()
-        if not mobName then return end
+        if safeRetreat() then return end
+        masteryCheck()
+
+        local mobName, q
+        if BF.BossMob then
+            mobName = BF.BossMob
+            if BF.BossQuest then q = bossQuestOf(BF.BossMob) end
+        elseif BF.FreeMob then
+            mobName = BF.FreeMob
+        else
+            local l = getLvl(); if not l then return end
+            q = BF.SelectedQuest or pickQ(l)
+            if not q then return end
+            mobName = q.mob
+        end
 
         local qpos = q and questPos(q)
         if q then
             local r = ensureQuest(q)
-            if r == "noquest" then q = nil       -- quest nao ativa: bate nos mobs mesmo assim
-            elseif not r then return end
-        end
-
-        -- ponto fixo (so quando nao ha mob vivo por perto)
-        local spot = FARM_SPOTS[mobName:lower()]
-        if spot then
-            if spot.water then applyWater(true) end
-            local hrp = getHRP()
-            if hrp and #getMobs(mobName) == 0 and (hrp.Position - spot.pos).Magnitude > 150 then
-                notify("Auto Farm", "Indo ao ponto de "..mobName)
-                goTo(spot.pos + Vector3.new(0, 5, 0), 25)
-                return
-            end
+            if not r then return end -- Aguarda conseguir a missao antes de atacar
         end
 
         local mob = huntMob(mobName, qpos)
@@ -827,7 +1109,6 @@ return function(ctx)
 
     local function startFarm()
         if BF.FarmThread then return end
-        startNoclip()
         BF.FarmThread = task.spawn(function()
             while BF.Enabled do
                 local ok, err = pcall(farmTick)
@@ -839,291 +1120,743 @@ return function(ctx)
     end
 
     --================================================--
-    -- UI
+    -- MODOS DE FARM EXTRA: Nearest, Kill Mob, All Island, Ectoplasm, Factory,
+    -- Elite Hunter, Rip Indra, Cake Prince, Berry
     --================================================--
-    local spawnsOk = scanSpawns()
-    local nOpts, bOpts, nMap, bMap = buildMobLists()
+    do
+        local CollectionService = game:GetService("CollectionService")
+        local kills, eliteProgress, eliteStatus = 0, 0, "Not Found"
 
-    local bfTab = Window:AddTab("Blox Fruits", "◇")
-    local sFarm = bfTab:AddSection("Auto Farm")
-    local bfStatus = sFarm:AddLabel("Verificando...")
-    task.spawn(function()
-        task.wait(2)
-        bfStatus:Set(spawnsOk and "[OK] Blox Fruits + spawns carregados" or "[!] Spawns nao encontrados (usando orbita no NPC)")
-    end)
-    local statusLbl = sFarm:AddLabel("Status: parado")
-    local mobCountLbl = sFarm:AddLabel("Mobs: --")
-    local dbgLbl = sFarm:AddLabel("Debug: clique num botao de debug")
-
-    local function currentModeText()
-        if BF.BossMob then return "BOSS "..BF.BossMob end
-        if BF.FreeMob then return "MOB "..BF.FreeMob end
-        local q = BF.SelectedQuest or pickQ(getLvl() or 0)
-        return q and questLabel(q) or "nenhuma"
-    end
-    local function updStatus()
-        local l = getLvl() or 0
-        if BF.Enabled then statusLbl:Set("FARMANDO - Nv "..l.." -> "..currentModeText())
-        else statusLbl:Set("Parado") end
-    end
-
-    sFarm:AddToggle({ Name="Auto Farm", Default=false, Flag="AutoFarm", Callback=function(v)
-        BF.Enabled = v
-        if not v then stopNoclip() end
-        if v then
-            if not next(SpawnsByMob) then scanSpawns() end
-            startFarm()
-            Library:Notify({Title="Auto Farm", Message="Iniciado", Type="success"})
-        else
-            Library:Notify({Title="Auto Farm", Message="Parado", Type="warn"})
-        end
-        updStatus()
-    end })
-    sFarm:AddToggle({ Name="Fly Farm", Default=true, Flag="FlyFarm", Callback=function(v) BF.FlyFarm = v end })
-    sFarm:AddSlider({ Name="Velocidade Voo Farm", Min=20, Max=200, Default=60, Step=5, Suffix=" sp", Flag="FlyFarmSpeed", Callback=function(v) BF.FlySpeed = v end })
-    sFarm:AddToggle({ Name="Fast Attack", Default=true, Flag="FastAttack", Callback=function(v) BF.FastAttack = v end })
-    sFarm:AddSlider({ Name="Altura sobre o mob", Min=2, Max=20, Default=7, Step=1, Suffix=" st", Flag="FarmHeight", Callback=function(v) BF.Height = v end })
-    sFarm:AddToggle({ Name="Andar na Agua", Default=false, Flag="WaterWalk", Callback=function(v)
-        BF.WaterWalk = v
-        applyWater(v)
-    end })
-    sFarm:AddToggle({ Name="Bring Mobs", Default=false, Flag="BringMobs", Callback=function(v) BF.BringMobs = v end })
-    sFarm:AddDropdown({ Name="Arma", Options={"Melee","Sword","Blox Fruit","Gun"}, Default="Melee", Flag="WeaponType", Callback=function(v) BF.WeaponType = v or "Melee" end })
-
-    sFarm:AddToggle({ Name="ESP Enemies", Default=false, Flag="ESPEnemies", Callback=function(v)
-        if not v then return end
-        task.spawn(function()
-            local dr = {}
-            while Library.Flags.ESPEnemies do
-                local e = workspace:FindFirstChild("Enemies")
-                if e then
-                    for _, m in ipairs(e:GetChildren()) do
-                        if m:FindFirstChild("HumanoidRootPart") and not dr[m] then
-                            local b = Drawing.new("Square")
-                            b.Thickness = 1; b.Color = Color3.fromRGB(255,60,60); b.Filled = false; b.Visible = true
-                            dr[m] = b
+        -- procura o inimigo mais proximo cujo nome contem (ou e igual a) um dos padroes
+        local function findEnemyLike(patterns, exact)
+            local enemies = workspace:FindFirstChild("Enemies")
+            if not enemies then return nil end
+            local h = getHRP()
+            local best, bd
+            for _, m in ipairs(enemies:GetChildren()) do
+                local hum = m:FindFirstChildOfClass("Humanoid")
+                local r = getRoot(m)
+                if hum and hum.Health > 0 and r then
+                    local n = (m.Name:match("^(.-)%s*%[") or m.Name):lower()
+                    for _, p in ipairs(patterns) do
+                        if (exact and n == p) or (not exact and n:find(p, 1, true)) then
+                            local d = h and (h.Position - r.Position).Magnitude or 0
+                            if not bd or d < bd then best, bd = m, d end
+                            break
                         end
                     end
                 end
-                for mob, b in pairs(dr) do
-                    if mob and mob.Parent and mob:FindFirstChild("HumanoidRootPart") then
-                        local p, on = ctx.Camera:WorldToViewportPoint(mob.HumanoidRootPart.Position)
-                        b.Position = Vector2.new(p.X-20, p.Y-40); b.Size = Vector2.new(40,80); b.Visible = on
-                    else
-                        pcall(function() b:Remove() end); dr[mob] = nil
+            end
+            return best
+        end
+
+        local function reach(mob)
+            local h, r = getHRP(), getRoot(mob)
+            if not h or not r then return false end
+            if (h.Position - r.Position).Magnitude > 20 then
+                goTo(r.Position + Vector3.new(0, BF.Height, 0), 60)
+            end
+            return true
+        end
+
+        local function fight(mob, q)
+            engage(mob, q)
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            if not mob.Parent or (hum and hum.Health <= 0) then kills = kills + 1 end
+        end
+
+        -- Auto Farm Nearest
+        local function modeNearest()
+            local mob = findEnemyLike({ "" })
+            if not mob then return false end
+            if reach(mob) then fight(mob) end
+            return true
+        end
+
+        -- Auto Kill Mob (mob escolhido)
+        local function modeKill()
+            if not BF.KillMobName then return false end
+            local mob = huntMob(BF.KillMobName, nil)
+            if mob then fight(mob) end
+            return true
+        end
+
+        -- Auto Farm All Island (percorre os mobs de todas as quests do mar atual)
+        local islandList, islandSeen, islandIdx = {}, {}, 1
+        for _, q in ipairs(QUESTS) do
+            if q.sea == Sea and not BOSS_NAMES[q.mob:lower()] and not islandSeen[q.mob] then
+                islandSeen[q.mob] = true
+                islandList[#islandList + 1] = q
+            end
+        end
+        local function modeIsland()
+            local q = islandList[islandIdx]
+            if not q then return false end
+            local pos = questPos(q)
+            local mob = huntMob(q.mob, pos)
+            if mob then
+                fight(mob)
+                return true
+            end
+            local h = getHRP()
+            if h and (h.Position - (pos + Vector3.new(0, 5, 0))).Magnitude <= 30 then
+                islandIdx = islandIdx % #islandList + 1
+            end
+            return true
+        end
+
+        -- Auto Farm Ectoplasm (Segundo Mar, Cursed Ship; posicao aproximada)
+        local ECTO_MOBS = { "ship deckhand", "ship engineer", "ship steward", "ship officer" }
+        local SHIP_POS = Vector3.new(923, 126, 32852)
+        local function modeEcto()
+            if Sea ~= 2 then return false end
+            local mob = findEnemyLike(ECTO_MOBS)
+            if mob then
+                if reach(mob) then fight(mob) end
+                return true
+            end
+            local h = getHRP()
+            if h and (h.Position - SHIP_POS).Magnitude > 60 then
+                goTo(SHIP_POS + Vector3.new(0, 10, 0), 120)
+            else
+                task.wait(2)
+            end
+            return true
+        end
+
+        -- Auto Factory Raid (boss Core, so existe com a fabrica ativa)
+        local function modeFactory()
+            if Sea ~= 2 then return false end
+            local mob = findEnemyLike({ "core" }, true)
+            if not mob then return false end
+            if reach(mob) then fight(mob) end
+            return true
+        end
+
+        -- Elite Hunter (Diablo / Urban / Deandre)
+        local ELITE = { "diablo", "urban", "deandre" }
+        local nextElite = 0
+        local function modeElite()
+            if Sea ~= 3 then eliteStatus = "So no Terceiro Mar"; return false end
+            local cf = getCommF(); if not cf then return false end
+            pcall(function()
+                local p = cf:InvokeServer("EliteHunter", "Progress")
+                if type(p) == "number" then eliteProgress = p end
+            end)
+            local mob = findEnemyLike(ELITE)
+            local tried = false
+            if not mob and os.clock() >= nextElite then
+                tried = true
+                nextElite = os.clock() + 8
+                pcall(function() cf:InvokeServer("EliteHunter") end)
+                task.wait(1.5)
+                mob = findEnemyLike(ELITE)
+            end
+            if mob then
+                eliteStatus = "Found: " .. mob.Name
+                if reach(mob) then fight(mob) end
+                return true
+            end
+            eliteStatus = "Not Found"
+            if tried and BF.EliteHop then serverHop("random") end
+            return false
+        end
+
+        -- Rip Indra (so ataca se ja estiver spawnado)
+        local function modeIndra()
+            local mob = findEnemyLike({ "rip_indra", "rip indra" })
+            if not mob then return false end
+            if reach(mob) then fight(mob) end
+            return true
+        end
+
+        -- Cake Prince (Terceiro Mar)
+        local CAKE_MOBS = { "cookie crafter", "cake guard", "baking staff", "head baker" }
+        local nextSpawn = 0
+        local function cakeQuestFor(mobName)
+            local best
+            local l = getLvl() or 0
+            for _, q in ipairs(QUESTS) do
+                if q.sea == 3 and q.mob:lower() == mobName:lower() and l >= q.minLevel then best = q end
+            end
+            return best
+        end
+        local function modeCake()
+            if Sea ~= 3 then return false end
+            local prince = findEnemyLike({ "cake prince" })
+            if not prince and BF.CakeSpawn and os.clock() >= nextSpawn then
+                nextSpawn = os.clock() + 10
+                local cf = getCommF()
+                if cf then pcall(function() cf:InvokeServer("CakePrinceSpawner") end) end
+                task.wait(1)
+                prince = findEnemyLike({ "cake prince" })
+            end
+            if prince then
+                if reach(prince) then fight(prince) end
+                return true
+            end
+            local mob = findEnemyLike(CAKE_MOBS)
+            if mob then
+                local q
+                if BF.CakeQuest then q = cakeQuestFor(mob.Name:match("^(.-)%s*%[") or mob.Name) end
+                if q and not ensureQuest(q) then return true end
+                if reach(mob) then fight(mob, q) end
+                return true
+            end
+            for _, q in ipairs(QUESTS) do
+                if q.sea == 3 and q.mob:lower() == CAKE_MOBS[1] then
+                    goTo(questPos(q) + Vector3.new(0, 5, 0), 60)
+                    return true
+                end
+            end
+            return false
+        end
+
+        -- Berry (melhor esforco: usa a tag BerryBush; sem a tag o modo nao faz nada)
+        local berryDone = {}
+        local function modeBerry()
+            local bushes = CollectionService:GetTagged("BerryBush")
+            local h = getHRP()
+            if not h then return false end
+            local best, bd, bp
+            for _, b in ipairs(bushes) do
+                if not berryDone[b] or os.clock() > berryDone[b] then
+                    local ok, p = pcall(function() return b:GetPivot().Position end)
+                    if ok then
+                        local d = (h.Position - p).Magnitude
+                        if not bd or d < bd then best, bd, bp = b, d, p end
                     end
                 end
-                task.wait(0.05)
             end
-            for _, b in pairs(dr) do pcall(function() b:Remove() end) end
-        end)
-    end })
+            if not best then
+                if BF.BerryHop and #bushes > 0 then serverHop("random") end
+                return false
+            end
+            goTo(bp + Vector3.new(0, 4, 0), 120)
+            task.wait(0.4)
+            for _, d in ipairs(best:GetDescendants()) do
+                if d:IsA("ProximityPrompt") then pcall(fireproximityprompt, d) end
+                if d:IsA("ClickDetector") then pcall(fireclickdetector, d) end
+            end
+            berryDone[best] = os.clock() + 120
+            return true
+        end
 
-    sFarm:AddButton({ Name="Atualizar Status", Callback=updStatus })
-    sFarm:AddButton({ Name="Reescanear Spawns", Callback=function()
-        local ok = scanSpawns()
-        Library:Notify({Title="Spawns", Message=ok and "Spawns atualizados (reabra o hub p/ atualizar listas)" or "Nao encontrados (usara orbita no NPC)", Type=ok and "success" or "warn"})
-    end })
+        local MODE_ORDER = { "elite", "indra", "cake", "factory", "ecto", "kill", "island", "nearest", "berry" }
+        local MODE_FN = {
+            elite = modeElite, indra = modeIndra, cake = modeCake, factory = modeFactory, ecto = modeEcto,
+            kill = modeKill, island = modeIsland, nearest = modeNearest, berry = modeBerry,
+        }
 
-    -- saida de debug: F9 + console do executor + clipboard + label na UI
-    local function emit(lines)
-        local text = table.concat(lines, "\n")
-        for _, l in ipairs(lines) do print(l) end
-        pcall(function() rconsoleprint(text.."\n") end)
-        local copied = pcall(function() setclipboard(text) end)
-        local short = {}
-        for i = 1, math.min(#lines, 4) do short[i] = lines[i] end
-        pcall(function() dbgLbl:Set(table.concat(short, " | ")) end)
-        pcall(function()
-            Library:Notify({Title="Debug", Message = copied and "Copiado! Cole aqui no chat (Ctrl+V)" or "Resumo no label (F9/console pode nao mostrar)", Type="success", Duration=4})
-        end)
+        local function modeTick()
+            if not getHRP() then return end
+            if safeRetreat() then return end
+            masteryCheck()
+            for _, name in ipairs(MODE_ORDER) do
+                if BF.Modes[name] then
+                    local ok, acted = pcall(MODE_FN[name])
+                    if not ok then warn("modo " .. name .. ":", acted); FlyFarmMoving = false end
+                    if ok and acted then return end
+                end
+            end
+            task.wait(0.5)
+        end
+
+        function Modes.set(name, v)
+            BF.Modes[name] = v and true or nil
+            if v then
+                spawnOnce("modes", function()
+                    while anyMode() do
+                        modeTick()
+                        task.wait(0.15)
+                    end
+                end)
+            end
+        end
+        function Modes.info() return kills, eliteProgress, eliteStatus end
     end
 
-    sFarm:AddButton({ Name="Debug: mobs sem quest", Callback=function()
-        local ok = scanSpawns()
-        local total = 0
-        for _ in pairs(SpawnsByMob) do total += 1 end
-        local L = { "spawns lidos: "..total.." mobs ("..(ok and "ok" or "NENHUM, pasta nao achada")..")" }
-        local known = {}
-        for _, q in ipairs(QUESTS) do known[q.mob:lower()] = true end
-        table.insert(L, "=== MOBS SEM QUEST ===")
-        for k, list in pairs(SpawnsByMob) do
-            if not known[k] then
-                table.insert(L, ("  %s | Lv %d | %s | %d spawns"):format(SpawnNames[k], list[1].level, list[1].boss and "normal", #list))
+    --================================================--
+    -- RAIDS & SEA EVENTS (PRO)
+    --================================================--
+    local function farmRaid()
+        if not BF.AutoRaid then return end
+        local inRaid = workspace:FindFirstChild("Enemies") and workspace.Enemies:FindFirstChild("RaidBoss")
+        local hrp = getHRP()
+        
+        if not hrp then return end
+        if inRaid then
+            for _, mob in ipairs(workspace.Enemies:GetChildren()) do
+                local mobHrp = getRoot(mob)
+                local hum = mob:FindFirstChildOfClass("Humanoid")
+                if mobHrp and hum and hum.Health > 0 then
+                    flyTo(mobHrp.Position + Vector3.new(0, 7, 0), BF.FlySpeed)
+                    hrp.CFrame = CFrame.lookAt(hrp.Position, mobHrp.Position)
+                    pcall(function() atk(equip()) end)
+                    useSkills()
+                    break 
+                end
+            end
+        else
+            local cf = getCommF()
+            if cf then
+                pcall(function() cf:InvokeServer("RaidsNpc", "Select", BF.RaidChip) end)
+                local tubePosition = Sea == 3 and Vector3.new(-5000, 300, -6000) or Vector3.new(-6508, 252, -4532)
+                flyTo(tubePosition, BF.FlySpeed)
+                task.wait(1)
+                pcall(function() fireclickdetector(workspace.Map.RaidLab.Button.ClickDetector) end)
             end
         end
-        table.insert(L, "=== QUESTS SEM SPAWN ===")
-        for _, q in ipairs(QUESTS) do
-            if not spawnsFor(q.mob) then table.insert(L, "  "..q.mob) end
-        end
-        emit(L)
-    end })
+    end
 
-    sFarm:AddButton({ Name="Debug: alvo atual", Callback=function()
-        local mobName, q = resolveTarget()
-        local h = getHRP()
-        local sl = mobName and spawnsFor(mobName)
-        local L = {
-            "alvo: "..tostring(mobName).." | achados: "..(mobName and #getMobs(mobName) or 0).." | spawns: "..(sl and #sl or 0),
-            "hasQ: "..tostring(hasQ()).." | titulo: "..tostring(getQT()).." | match: "..tostring(q and questMatches(q)),
-            "ultimo StartQuest (ok / codigo): "..tostring(BF.LastQuestRes),
-        }
-        if q then
-            local qp = questPos(q)
-            table.insert(L, "quest: "..q.quest.." #"..q.index.." | npc: "..q.npc.." | pos NPC: "..tostring(qp))
-            if h then table.insert(L, ("distancia ate o NPC: %.0f studs"):format((h.Position - qp).Magnitude)) end
-        end
-        local enemies = workspace:FindFirstChild("Enemies")
-        if enemies and mobName then
-            table.insert(L, "todos com esse nome:")
-            for _, m in ipairs(enemies:GetChildren()) do
-                local r = getRoot(m)
-                if r and norm(m.Name) == norm(mobName) then
-                    table.insert(L, ("  %s pos=%s valido=%s"):format(m.Name, tostring(r.Position), tostring(validPos(mobName, r.Position))))
+    local function farmSeaEvents()
+        if not BF.SeaEvents then return end
+        local hrp = getHRP()
+        if not hrp then return end
+
+        local sb = workspace:FindFirstChild("SeaBeast") or (workspace:FindFirstChild("Enemies") and workspace.Enemies:FindFirstChild("Terrorshark"))
+        if sb then
+            local mobHrp = getRoot(sb)
+            if mobHrp then
+                flyTo(mobHrp.Position + Vector3.new(0, 100, 0), BF.FlySpeed)
+                hrp.CFrame = CFrame.lookAt(hrp.Position, mobHrp.Position)
+                pcall(function() atk(equip()) end)
+                useSkills()
+            end
+        else
+            local myBoat = workspace.Boats:FindFirstChild(LP.Name .. "Boat")
+            if not myBoat then
+                local cf = getCommF()
+                if cf then pcall(function() cf:InvokeServer("BuyBoat", BF.BoatName) end); task.wait(2) end
+            else
+                local seat = myBoat:FindFirstChild("VehicleSeat")
+                if seat and seat.Occupant == nil then
+                    hrp.CFrame = seat.CFrame; task.wait(0.5)
+                end
+                local dangerZone = Vector3.new(10000, 20, 10000) 
+                if (hrp.Position - dangerZone).Magnitude > 500 then
+                    myBoat:SetPrimaryPartCFrame(CFrame.new(myBoat.PrimaryPart.Position, dangerZone) * CFrame.new(0,0,-50))
                 end
             end
         end
-        if enemies and h then
-            table.insert(L, "inimigos vivos num raio de 300:")
-            for _, m in ipairs(enemies:GetChildren()) do
-                local r = getRoot(m)
-                local hu = m:FindFirstChildOfClass("Humanoid")
-                if r and hu and hu.Health > 0 and (r.Position - h.Position).Magnitude < 300 then
-                    table.insert(L, ("  '%s' (%.0f studs)"):format(m.Name, (r.Position - h.Position).Magnitude))
+    end
+
+    --================================================--
+    -- UI - INTERFACE (PREMIUM HUB PRO v15)
+    --================================================--
+    local function titleCase(s)
+        return (s:gsub("(%a)([%w']*)", function(a, b) return a:upper() .. b end))
+    end
+
+    local function setLabel(lbl, txt)
+        if not lbl then return end
+        for _, m in ipairs({ "Set", "SetText", "SetValue", "Update" }) do
+            local ok, f = pcall(function() return lbl[m] end)
+            if ok and type(f) == "function" then
+                if pcall(f, lbl, txt) then return end
+            end
+        end
+        pcall(function() lbl.Text = txt end)
+    end
+
+    local function addInput(section, name, flag, placeholder, cb)
+        for _, m in ipairs({ "AddTextbox", "AddTextBox", "AddInput" }) do
+            local ok, f = pcall(function() return section[m] end)
+            if ok and type(f) == "function" then
+                if pcall(f, section, { Name = name, Default = "", Placeholder = placeholder, Flag = flag, Callback = cb }) then
+                    return true
                 end
             end
         end
-        emit(L)
-    end })
+        return false
+    end
 
-    sFarm:AddButton({ Name="Debug: quests do jogo", Callback=function()
-        local myLvl = getLvl() or 0
-        local L = { "nivel: "..myLvl.." | hasQ: "..tostring(hasQ()).." | titulo: "..tostring(getQT()) }
-        local QuestsMod = game:GetService("ReplicatedStorage"):FindFirstChild("Quests")
-        if not QuestsMod then
-            table.insert(L, "ReplicatedStorage.Quests nao encontrado")
-            return emit(L)
-        end
-        local ok, Quests = pcall(require, QuestsMod)
-        if not ok then
-            table.insert(L, "Falha ao requerer Quests: "..tostring(Quests))
-            return emit(L)
-        end
-        table.insert(L, "=== QUESTS REAIS DO JOGO ===")
-        for questName, entries in pairs(Quests) do
-            for idx, e in ipairs(entries) do
-                local taskTxt = ""
-                for mob, n in pairs(e.Task or {}) do taskTxt = mob.." x"..n; break end
-                local marker = (e.LevelReq <= myLvl and e.LevelReq + 25 > myLvl) and "  <<< SUA FAIXA" or ""
-                table.insert(L, ("  %s #%d | Lv%d | %s | %s%s"):format(questName, idx, e.LevelReq, tostring(e.Name), taskTxt, marker))
+    -- opcoes dinamicas (filtradas pelo mar atual)
+    local questOptions, questMap = { "Automático" }, {}
+    local mobOptions, mobSeen = { "Nenhum" }, {}
+    for _, q in ipairs(QUESTS) do
+        if q.sea == Sea and not BOSS_NAMES[q.mob:lower()] then
+            local label = string.format("Lv %d - %s", q.minLevel, q.mob)
+            questOptions[#questOptions + 1] = label
+            questMap[label] = q
+            if not mobSeen[q.mob] then
+                mobSeen[q.mob] = true
+                mobOptions[#mobOptions + 1] = q.mob
             end
         end
-        emit(L)
-    end })
+    end
+    local bossOptions, bossMap, bossNames = { "Nenhum" }, {}, {}
+    for n in pairs(BOSS_NAMES) do bossNames[#bossNames + 1] = n end
+    table.sort(bossNames)
+    for _, n in ipairs(bossNames) do
+        local t = titleCase(n)
+        bossOptions[#bossOptions + 1] = t
+        bossMap[t] = n
+    end
 
-    sFarm:AddButton({ Name="Salvar minha posicao como ponto do mob", Callback=function()
-        local mobName = resolveTarget()
-        local h = getHRP()
-        if not mobName or not h then return end
-        FARM_SPOTS[mobName:lower()] = { pos = h.Position, water = BF.WaterWalk }
-        print(("FARM_SPOTS[%q] = { pos = V(%.2f, %.2f, %.2f), water = %s }"):format(
-            mobName:lower(), h.Position.X, h.Position.Y, h.Position.Z, tostring(BF.WaterWalk)))
-        Library:Notify({Title="Ponto salvo", Message=mobName.." (copie a linha do F9 p/ manter)", Type="success"})
-    end })
+    local infoLbls = {}
+    do
+        local infoTab = Window:AddTab("Info & Status", "ℹ️")
+        local sInfo = infoTab:AddSection("Jogador")
+        infoLbls.sea = sInfo:AddLabel("Mar: " .. getSeaName())
+        infoLbls.lvl = sInfo:AddLabel("Level: ...")
+        infoLbls.money = sInfo:AddLabel("Beli / Fragmentos: ...")
+        local sSrv = infoTab:AddSection("Servidor")
+        infoLbls.players = sSrv:AddLabel("Jogadores: ...")
+        infoLbls.job = sSrv:AddLabel("JobId: " .. tostring(game.JobId))
+        infoLbls.time = sSrv:AddLabel("Sessão: 0s")
+    end
 
-    local sUtil = bfTab:AddSection("Utilidades")
-    sUtil:AddToggle({ Name="Auto Haki (Buso)", Default=false, Flag="AutoBuso", Callback=function(v) BF.AutoBuso = v end })
-    sUtil:AddToggle({ Name="Auto Stats", Default=false, Flag="AutoStats", Callback=function(v) BF.AutoStats = v end })
-    sUtil:AddDropdown({ Name="Stat para upar", Options={"Melee","Defense","Sword","Gun","Demon Fruit"}, Default="Melee", Flag="StatName", Callback=function(v) BF.StatName = v or "Melee" end })
-    sUtil:AddToggle({ Name="Modo Seguro (vida baixa)", Default=true, Flag="SafeMode", Callback=function(v) BF.SafeMode = v end })
-    sUtil:AddSlider({ Name="Recuar abaixo de", Min=10, Max=70, Default=35, Step=5, Suffix="%", Flag="SafeHP", Callback=function(v) BF.SafeHP = v end })
-    sUtil:AddToggle({ Name="Anti-AFK", Default=true, Flag="AntiAFK", Callback=function(v) BF.AntiAFK = v end })
-    sUtil:AddToggle({ Name="FPS Boost", Default=false, Flag="FPSBoost", Callback=function(v)
+    ------------------------------------------------------------------ ABA: AUTO FARM
+    local bfTab = Window:AddTab("Auto Farm", "◇")
+    local sFarm = bfTab:AddSection("Auto Farm Principal")
+
+    local statusLbl = sFarm:AddLabel("Status: " .. getSeaName())
+
+    sFarm:AddToggle({ Name = "Auto Farm Level", Default = false, Flag = "AutoFarm", Callback = function(v)
+        BF.Enabled = v
+        if v then startFarm(); notify("Auto Farm", "Iniciado", "success") else notify("Auto Farm", "Parado", "warn") end
+    end })
+    sFarm:AddSlider({ Name = "Velocidade de Voo (Tween)", Min = 50, Max = 350, Default = BF.FlySpeed, Step = 10, Suffix = " sp", Flag = "FlyFarmSpeed", Callback = function(v) setOpt("FlySpeed", v) end })
+    sFarm:AddToggle({ Name = "Fast Attack", Default = BF.FastAttack, Flag = "FastAttack", Callback = function(v) setOpt("FastAttack", v) end })
+    sFarm:AddToggle({ Name = "Bring Mobs", Default = BF.BringMobs, Flag = "BringMobs", Callback = function(v) setOpt("BringMobs", v) end })
+    sFarm:AddDropdown({ Name = "Arma de Combate", Options = { "Melee", "Sword", "Blox Fruit", "Gun" }, Default = BF.WeaponType, Flag = "WeaponType", Callback = function(v) setOpt("WeaponType", v or "Melee") end })
+
+    local sTarget = bfTab:AddSection("Alvo / Missão")
+    sTarget:AddDropdown({ Name = "Quest manual (" .. getSeaName() .. ")", Options = questOptions, Default = "Automático", Flag = "QuestPick", Callback = function(v)
+        BF.SelectedQuest = questMap[v]
+    end })
+    sTarget:AddDropdown({ Name = "Mob livre (sem quest)", Options = mobOptions, Default = "Nenhum", Flag = "FreeMobPick", Callback = function(v)
+        BF.FreeMob = (v and v ~= "Nenhum") and v or nil
+    end })
+    sTarget:AddDropdown({ Name = "Boss alvo", Options = bossOptions, Default = "Nenhum", Flag = "BossPick", Callback = function(v)
+        BF.BossMob = bossMap[v]
+        if BF.BossMob then notify("Boss", "Alvo: " .. tostring(v), "info", 2) end
+    end })
+    sTarget:AddToggle({ Name = "Boss com Quest (quando existir)", Default = BF.BossQuest, Flag = "BossQuest", Callback = function(v) setOpt("BossQuest", v) end })
+
+    local sSafe = bfTab:AddSection("Segurança & Desempenho")
+    sSafe:AddToggle({ Name = "Safe Mode (recuar com pouca vida)", Default = BF.SafeMode, Flag = "SafeMode", Callback = function(v) setOpt("SafeMode", v) end })
+    sSafe:AddSlider({ Name = "Recuar abaixo de (% vida)", Min = 10, Max = 80, Default = BF.SafeHP, Step = 5, Suffix = "%", Flag = "SafeHP", Callback = function(v) setOpt("SafeHP", v) end })
+    sSafe:AddToggle({ Name = "Anti-AFK", Default = BF.AntiAFK, Flag = "AntiAFK", Callback = function(v) setOpt("AntiAFK", v) end })
+    sSafe:AddToggle({ Name = "FPS Boost", Default = false, Flag = "FPSBoost", Callback = function(v)
         BF.FPSBoost = v
-        applyFPSBoost(v)
+        fpsBoost(v)
     end })
 
-    local sManual = bfTab:AddSection("Modo de Farm")
-    local qOpts = { "Automatico" }
-    for _, q in ipairs(QUESTS) do table.insert(qOpts, questLabel(q)) end
-    sManual:AddDropdown({ Name="Escolher Quest", Options=qOpts, Default="Automatico", Flag="ManualQuest", Callback=function(v)
-        BF.SelectedQuest = nil
-        if v and v ~= "Automatico" then
-            for _, q in ipairs(QUESTS) do if questLabel(q) == v then BF.SelectedQuest = q; break end end
+    local sMast = bfTab:AddSection("Auto Mastery (ligue o Auto Farm também)")
+    sMast:AddToggle({ Name = "Farmar Mastery", Default = false, Flag = "Mastery", Callback = function(v)
+        BF.Mastery = v
+        if v then notify("Mastery", "Usando " .. BF.MasteryWeapon .. " com Z/X/C/V", "info", 3) end
+    end })
+    sMast:AddDropdown({ Name = "Arma de Mastery", Options = { "Blox Fruit", "Sword" }, Default = BF.MasteryWeapon, Flag = "MasteryWeapon", Callback = function(v) setOpt("MasteryWeapon", v or "Blox Fruit") end })
+    sMast:AddSlider({ Name = "Parar na Mastery", Min = 50, Max = 600, Default = BF.MasteryTarget, Step = 50, Suffix = "", Flag = "MasteryTarget", Callback = function(v) setOpt("MasteryTarget", v) end })
+
+    local sSkills = bfTab:AddSection("Auto Skills (Combate)")
+    sSkills:AddToggle({ Name = "Usar Z", Default = BF.AutoZ, Flag = "AutoZ", Callback = function(v) setOpt("AutoZ", v) end })
+    sSkills:AddToggle({ Name = "Usar X", Default = BF.AutoX, Flag = "AutoX", Callback = function(v) setOpt("AutoX", v) end })
+    sSkills:AddToggle({ Name = "Usar C", Default = BF.AutoC, Flag = "AutoC", Callback = function(v) setOpt("AutoC", v) end })
+    sSkills:AddToggle({ Name = "Usar V", Default = BF.AutoV, Flag = "AutoV", Callback = function(v) setOpt("AutoV", v) end })
+    sSkills:AddToggle({ Name = "Ativar Kill Aura", Default = false, Flag = "KillAura", Callback = function(v)
+        BF.KillAura = v
+        if v then loopFlag("killaura", "KillAura", killAuraTick, 0.1) end
+    end })
+    sSkills:AddSlider({ Name = "Raio Kill Aura", Min = 10, Max = 100, Default = BF.AuraRadius, Step = 5, Suffix = " st", Flag = "AuraRadius", Callback = function(v) setOpt("AuraRadius", v) end })
+
+    do
+        local sExtra = bfTab:AddSection("Farming Extra")
+        sExtra:AddToggle({ Name = "Auto Farm Nearest", Default = false, Flag = "ModeNearest", Callback = function(v) Modes.set("nearest", v) end })
+        sExtra:AddToggle({ Name = "Auto Farm All Island", Default = false, Flag = "ModeIsland", Callback = function(v) Modes.set("island", v) end })
+        sExtra:AddDropdown({ Name = "Select Mob", Options = mobOptions, Default = "Nenhum", Flag = "KillMobPick", Callback = function(v)
+            BF.KillMobName = (v and v ~= "Nenhum") and v or nil
+        end })
+        sExtra:AddToggle({ Name = "Auto Kill Mob", Default = false, Flag = "ModeKill", Callback = function(v) Modes.set("kill", v) end })
+        sExtra:AddToggle({ Name = "Auto Farm Ectoplasm (Mar 2)", Default = false, Flag = "ModeEcto", Callback = function(v) Modes.set("ecto", v) end })
+        sExtra:AddToggle({ Name = "Auto Factory Raid (Mar 2)", Default = false, Flag = "ModeFactory", Callback = function(v) Modes.set("factory", v) end })
+
+        local sElite = bfTab:AddSection("Farm Elite Hunter (Mar 3)")
+        infoLbls.elite = sElite:AddLabel("Elite Progress : 0")
+        infoLbls.estatus = sElite:AddLabel("Status: Not Found")
+        sElite:AddToggle({ Name = "Auto Farm Elite", Default = false, Flag = "ModeElite", Callback = function(v) Modes.set("elite", v) end })
+        sElite:AddToggle({ Name = "Auto Farm Elite + Hop", Default = false, Flag = "ModeEliteHop", Callback = function(v)
+            BF.EliteHop = v
+            Modes.set("elite", v or BF.Modes.elite)
+        end })
+
+        local sIndra = bfTab:AddSection("Farm Rip Indra (Mar 3)")
+        sIndra:AddToggle({ Name = "Auto Attack Rip Indra", Default = false, Flag = "ModeIndra", Callback = function(v) Modes.set("indra", v) end })
+
+        local sCake = bfTab:AddSection("Farming Cake (Mar 3)")
+        infoLbls.killed = sCake:AddLabel("Killed : 0")
+        sCake:AddToggle({ Name = "Auto Farm Cake Prince", Default = false, Flag = "ModeCake", Callback = function(v) Modes.set("cake", v) end })
+        sCake:AddToggle({ Name = "Accept Quests", Default = false, Flag = "CakeQuest", Callback = function(v) BF.CakeQuest = v end })
+        sCake:AddToggle({ Name = "Auto Spawn Cake Prince", Default = false, Flag = "CakeSpawn", Callback = function(v) BF.CakeSpawn = v end })
+
+        local sBerry = bfTab:AddSection("Collect Berry")
+        sBerry:AddToggle({ Name = "Auto Farm Berry", Default = false, Flag = "ModeBerry", Callback = function(v) Modes.set("berry", v) end })
+        sBerry:AddToggle({ Name = "Auto Farm Berry + Hop", Default = false, Flag = "ModeBerryHop", Callback = function(v)
+            BF.BerryHop = v
+            Modes.set("berry", v or BF.Modes.berry)
+        end })
+    end
+
+    ------------------------------------------------------------------ ABA: UTILIDADES
+    local utilTab = Window:AddTab("Utilidades", "🛠️")
+    local sUtil = utilTab:AddSection("Automação de Player")
+    sUtil:AddToggle({ Name = "Auto Haki (Buso)", Default = false, Flag = "AutoBuso", Callback = function(v) BF.AutoBuso = v end })
+    sUtil:AddToggle({ Name = "Auto Stats", Default = false, Flag = "AutoStats", Callback = function(v)
+        BF.AutoStats = v
+        if v then loopFlag("stats", "AutoStats", autoStats, 2) end
+    end })
+    sUtil:AddDropdown({ Name = "Stat para upar", Options = { "Melee", "Defense", "Sword", "Gun", "Demon Fruit" }, Default = BF.StatName, Flag = "StatName", Callback = function(v) setOpt("StatName", v or "Melee") end })
+    sUtil:AddButton({ Name = "Resgatar Todos os Códigos (Promo)", Callback = redeemAllCodes })
+    sUtil:AddButton({ Name = "Comprar Fruta Aleatória", Callback = buyRandomFruit })
+    sUtil:AddToggle({ Name = "Auto Coletar Baús (Beli Farm)", Default = false, Flag = "AutoChest", Callback = function(v)
+        BF.AutoChest = v
+        if v then
+            chestCacheStart()
+            loopFlag("chest", "AutoChest", farmChests, 0.2)
+        else
+            chestCacheStop()
         end
-        updStatus()
-    end })
-    sManual:AddDropdown({ Name="Farm sem Quest (mob)", Options=nOpts, Default="Nenhum", Flag="FreeMob", Callback=function(v)
-        BF.FreeMob = (v and v ~= "Nenhum") and nMap[v] or nil
-        updStatus()
-    end })
-    sManual:AddDropdown({ Name="Farm de Boss", Options=bOpts, Default="Nenhum", Flag="BossMob", Callback=function(v)
-        BF.BossMob = (v and v ~= "Nenhum") and bMap[v] or nil
-        updStatus()
-    end })
-    sManual:AddButton({ Name="Teleportar ate NPC", Callback=function()
-        local q = BF.SelectedQuest or pickQ(getLvl() or 1)
-        if q then tp(questPos(q)); Library:Notify({Title="Teleport", Message="Indo", Type="info"}) end
-    end })
-    sManual:AddButton({ Name="Pegar Quest", Callback=function()
-        local q = BF.SelectedQuest or pickQ(getLvl() or 1)
-        if q then sendQ(q.quest, q.index); Library:Notify({Title="Quest", Message="Aceita", Type="success"}) end
     end })
 
-    local sInfo = bfTab:AddSection("Info")
-    local infoLbl = sInfo:AddLabel("Carregando...")
+    local sSnipe = utilTab:AddSection("Fruit Sniper")
+    sSnipe:AddToggle({ Name = "Fruit ESP (Visual no Ecrã)", Default = false, Flag = "FruitESP", Callback = function(v)
+        BF.FruitESP = v
+        if v then spawnOnce("fruitesp", function() espLoop("FruitESP", Color3.fromRGB(255, 170, 0), collectFruits) end) end
+    end })
+    sSnipe:AddDropdown({ Name = "Raridade mínima", Options = RANK_LABELS, Default = BF.FruitMinRank, Flag = "FruitMinRank", Callback = function(v) setOpt("FruitMinRank", v or "Todas") end })
+    sSnipe:AddToggle({ Name = "Auto Voar p/ Frutas no Chão", Default = false, Flag = "AutoFruit", Callback = function(v)
+        BF.AutoFruit = v
+        if v then loopFlag("fruit", "AutoFruit", fruitSniper, 2) end
+    end })
+    sSnipe:AddToggle({ Name = "Auto Guardar Fruta (Store)", Default = false, Flag = "AutoStore", Callback = function(v)
+        BF.AutoStore = v
+        if v then loopFlag("store", "AutoStore", storeFruits, 2) end
+    end })
+    sSnipe:AddToggle({ Name = "Avisar no Discord (Webhook)", Default = false, Flag = "FruitWebhook", Callback = function(v)
+        BF.FruitWebhook = v
+        if v then
+            if BF.Webhook == "" then notify("Webhook", "Define o URL do webhook primeiro", "warn", 3) end
+            loopFlag("fruitwatch", "FruitWebhook", fruitWatch, 3)
+        end
+    end })
+    local hasInput = addInput(sSnipe, "URL do Webhook", "WebhookUrl", "https://discord.com/api/webhooks/...", function(v)
+        BF.Webhook = (tostring(v or ""):gsub("%s+", ""))
+        pcall(function() if writefile then writefile(WEBHOOK_FILE, BF.Webhook) end end)
+    end)
+    if not hasInput then
+        sSnipe:AddLabel("Sem caixa de texto na UI: cola o URL do webhook em " .. WEBHOOK_FILE)
+    end
 
-    -- loop unico de UI
+    local sHop = utilTab:AddSection("Server Hop")
+    sHop:AddToggle({ Name = "Hop se poucos jogadores", Default = false, Flag = "HopLow", Callback = function(v)
+        BF.HopLow = v
+        if v then loopFlag("hoplow", "HopLow", lowPopHop, 10) end
+    end })
+    sHop:AddSlider({ Name = "Mínimo de jogadores", Min = 1, Max = 15, Default = BF.HopMinPlayers, Step = 1, Suffix = "", Flag = "HopMinPlayers", Callback = function(v) setOpt("HopMinPlayers", v) end })
+    sHop:AddToggle({ Name = "Caçar Fruta (hop até achar)", Default = false, Flag = "HuntFruit", Callback = function(v)
+        BF.HuntFruit = v
+        if v then loopFlag("fruithunt", "HuntFruit", fruitHuntHop, 8) end
+    end })
+    sHop:AddButton({ Name = "Trocar de servidor agora", Callback = function() task.spawn(serverHop, "random") end })
+
+    local sTP = utilTab:AddSection("Teleporte")
+    sTP:AddDropdown({ Name = "Ilha / NPC (" .. getSeaName() .. ")", Options = ISLAND_LIST, Default = ISLAND_LIST[1], Flag = "TPIsland", Callback = function(v) BF.TPIsland = v end })
+    sTP:AddButton({ Name = "Ir para a ilha selecionada", Callback = function() spawnOnce("tp", tpIsland) end })
+    sTP:AddButton({ Name = "Viajar: Primeiro Mar", Callback = function() travelSea("TravelMain") end })
+    sTP:AddButton({ Name = "Viajar: Segundo Mar", Callback = function() travelSea("TravelDressrosa") end })
+    sTP:AddButton({ Name = "Viajar: Terceiro Mar", Callback = function() travelSea("TravelZou") end })
+
+    local sAwk = utilTab:AddSection("Awakening / Race V4")
+    sAwk:AddButton({ Name = "Verificar Awakening", Callback = awakenCheck })
+    sAwk:AddButton({ Name = "Despertar fruta agora", Callback = awakenDo })
+    sAwk:AddToggle({ Name = "Auto Awakening (tenta a cada 15s)", Default = false, Flag = "AutoAwaken", Callback = function(v)
+        BF.AutoAwaken = v
+        if v then loopFlag("awaken", "AutoAwaken", awakenDo, 15) end
+    end })
+    sAwk:AddButton({ Name = "Ver progresso Race V4", Callback = raceV4Check })
+
+    local sCfg = utilTab:AddSection("Configuração")
+    sCfg:AddButton({ Name = "Salvar configuração agora", Callback = function() cfgSave(); notify("Config", "Guardada em " .. CFG_FILE, "success", 2) end })
+    sCfg:AddButton({ Name = "Apagar configuração salva", Callback = function() cfgReset(); notify("Config", "Apagada (volta ao padrão no próximo load)", "warn", 3) end })
+
+    ------------------------------------------------------------------ ABA: VISUAIS
+    local espTab = Window:AddTab("Visuais", "👁️")
+    local sESP = espTab:AddSection("Rastreamento")
+    sESP:AddToggle({ Name = "Player ESP", Default = false, Flag = "PlayerESP", Callback = function(v)
+        BF.PlayerESP = v
+        if v then spawnOnce("playeresp", function() espLoop("PlayerESP", Color3.fromRGB(0, 255, 255), collectPlayers) end) end
+    end })
+
+    ------------------------------------------------------------------ ABA: RAIDS & SEA
+    local raidTab = Window:AddTab("Raids & Sea", "⚔️")
+    local sRaid = raidTab:AddSection("Auto Raid (Dungeons)")
+    sRaid:AddDropdown({ Name = "Selecionar Chip", Options = { "Flame", "Ice", "Quake", "Light", "Dark", "String", "Rumble", "Magma", "Buddha", "Sand", "Dough" }, Default = BF.RaidChip, Flag = "RaidChip", Callback = function(v) setOpt("RaidChip", v or "Flame") end })
+    sRaid:AddToggle({ Name = "Auto Completar Raid", Default = false, Flag = "AutoRaid", Callback = function(v)
+        BF.AutoRaid = v
+        if v then loopFlag("raid", "AutoRaid", farmRaid, 0.1) end
+    end })
+
+    local sSea = raidTab:AddSection("Sea Events (Mar 2 e 3)")
+    sSea:AddDropdown({ Name = "Barco", Options = { "Dinghy", "Sloop", "Lantern", "Swan" }, Default = BF.BoatName, Flag = "BoatName", Callback = function(v) setOpt("BoatName", v or "Sloop") end })
+    sSea:AddToggle({ Name = "Auto Caçar Monstros do Mar", Default = false, Flag = "SeaEvents", Callback = function(v)
+        BF.SeaEvents = v
+        if v then loopFlag("sea", "SeaEvents", farmSeaEvents, 0.1) end
+    end })
+
+    ------------------------------------------------------------------ STATUS + MANUTENCAO
+    local lastStatus = ""
+    local function updateStatus()
+        local lvl = getLvl() or "?"
+        local beli, frag = "?", "?"
+        pcall(function() beli = LP.Data.Beli.Value; frag = LP.Data.Fragments.Value end)
+        local q = hasQ() and (getQT() or "ativa") or "nenhuma"
+        local txt = string.format("%s | Lv %s | Beli %s | Frag %s | Quest: %s | Farm: %s",
+            getSeaName(), tostring(lvl), tostring(beli), tostring(frag), q, BF.Enabled and "ON" or "OFF")
+        if txt ~= lastStatus then
+            lastStatus = txt
+            setLabel(statusLbl, txt)
+        end
+    end
+
     local alive = true
     task.spawn(function()
         while alive do
             pcall(function()
-                local mobName = resolveTarget()
-                local enemies = workspace:FindFirstChild("Enemies")
-                local count, matches = 0, 0
-                if enemies then
-                    for _, m in ipairs(enemies:GetChildren()) do
-                        local hu = m:FindFirstChildOfClass("Humanoid")
-                        if hu and hu.Health > 0 then
-                            count += 1
-                            if mobName and baseName(m.Name) == mobName:lower() then matches += 1 end
-                        end
+                if BF.AutoBuso then
+                    local c = LP.Character
+                    if c and not c:FindFirstChild("HasBuso") then
+                        local cf = getCommF(); if cf then pcall(function() cf:InvokeServer("Buso") end) end
                     end
                 end
-                mobCountLbl:Set("Mobs: "..count.." total | "..(mobName or "?")..": "..matches)
-
-                local l = getLvl() or "?"
-                local t = getQT()
-                infoLbl:Set("Nv: "..l.." | Quest: "..(hasQ() and (t or "ativa") or "nenhuma"))
-                updStatus()
-                if BF.WaterWalk then applyWater(true) end
-                if BF.AutoBuso then ensureBuso() end
-                if BF.AutoStats then autoStats() end
             end)
+            pcall(updateStatus)
             task.wait(1)
         end
     end)
 
-    local waterConn = LP.CharacterAdded:Connect(function()
-        task.wait(1.5)
-        if BF.WaterWalk then applyWater(true) end
-    end)
+    do
+        -- Dungeon / Raiding
+        local function hasChip()
+            for _, c in ipairs({ LP.Backpack, LP.Character }) do
+                if c and c:FindFirstChild("Special Microchip") then return true end
+            end
+            return false
+        end
+        local function buyChip()
+            local cf = getCommF(); if not cf then return end
+            pcall(function() cf:InvokeServer("RaidsNpc", "Select", BF.RaidChip) end)
+        end
+        local function chipLoop()
+            if not hasChip() then buyChip() end
+        end
+        -- melhor esforco: usa os remotes getInventoryFruits / LoadFruit
+        local function cheapFruit()
+            local cf = getCommF(); if not cf then return end
+            for _, c in ipairs({ LP.Backpack, LP.Character }) do
+                if c then
+                    for _, t in ipairs(c:GetChildren()) do
+                        if t:IsA("Tool") and t.ToolTip == "Blox Fruit" then return end
+                    end
+                end
+            end
+            local ok, inv = pcall(function() return cf:InvokeServer("getInventoryFruits") end)
+            if ok and type(inv) == "table" then
+                for _, it in ipairs(inv) do
+                    if type(it) == "table" and it.Name and (tonumber(it.Price) or 9e9) < 1000000 then
+                        pcall(function() cf:InvokeServer("LoadFruit", it.Name) end)
+                        task.wait(0.5)
+                        break
+                    end
+                end
+            end
+        end
+
+        local sDun = raidTab:AddSection("Dungeon Event / Raiding")
+        sDun:AddButton({ Name = "Buy Dungeon Chip [Beli]", Callback = buyChip })
+        sDun:AddToggle({ Name = "Auto Buy Chip [Beli]", Default = false, Flag = "AutoBuyChip", Callback = function(v)
+            BF.AutoBuyChip = v
+            if v then loopFlag("buychip", "AutoBuyChip", chipLoop, 5) end
+        end })
+        sDun:AddToggle({ Name = "Get Fruit In Inventory Below 1M", Default = false, Flag = "CheapFruit", Callback = function(v)
+            BF.CheapFruit = v
+            if v then loopFlag("cheapfruit", "CheapFruit", cheapFruit, 5) end
+        end })
+
+        -- Auto Travel
+        local sAT = utilTab:AddSection("Travel - Auto")
+        sAT:AddToggle({ Name = "Auto Travel (ilha selecionada)", Default = false, Flag = "AutoTravel", Callback = function(v)
+            BF.AutoTravel = v
+            if v then
+                loopFlag("autotravel", "AutoTravel", function()
+                    local h = getHRP()
+                    local pos = ISLAND_POS[BF.TPIsland or ""]
+                    if h and pos and (h.Position - pos).Magnitude > 50 then tpIsland() end
+                end, 3)
+            end
+        end })
+
+        -- Server - Function
+        local jobInput = ""
+        local sSrv = utilTab:AddSection("Server - Function")
+        sSrv:AddButton({ Name = "Rejoin Server", Callback = function()
+            pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP) end)
+        end })
+        sSrv:AddButton({ Name = "Hop Server", Callback = function() task.spawn(serverHop, "random") end })
+        sSrv:AddButton({ Name = "Hop to Lowest Players", Callback = function() task.spawn(serverHop, "fewest") end })
+        sSrv:AddButton({ Name = "Hop to Lowest Pings Server", Callback = function() task.spawn(serverHop, "ping") end })
+        local hasJobInput = addInput(sSrv, "Input Job Id", "JobIdInput", "cola o JobId aqui", function(v)
+            jobInput = (tostring(v or ""):gsub("%s+", ""))
+        end)
+        if hasJobInput then
+            sSrv:AddButton({ Name = "Join Job Id", Callback = function()
+                if jobInput == "" then notify("Server", "Cola o JobId primeiro", "warn", 2); return end
+                pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, jobInput, LP) end)
+            end })
+        else
+            sSrv:AddLabel("Sem caixa de texto na UI: Job Id indisponivel")
+        end
+
+        -- atualiza os labels de Info e dos modos
+        local t0 = os.clock()
+        task.spawn(function()
+            while alive do
+                pcall(function()
+                    local k, ep, es = Modes.info()
+                    local lvl = getLvl() or "?"
+                    local beli, frag = "?", "?"
+                    pcall(function() beli = LP.Data.Beli.Value; frag = LP.Data.Fragments.Value end)
+                    setLabel(infoLbls.elite, "Elite Progress : " .. tostring(ep))
+                    setLabel(infoLbls.estatus, "Status: " .. tostring(es))
+                    setLabel(infoLbls.killed, "Killed : " .. tostring(k))
+                    setLabel(infoLbls.lvl, "Level: " .. tostring(lvl))
+                    setLabel(infoLbls.money, "Beli: " .. tostring(beli) .. " | Fragmentos: " .. tostring(frag))
+                    setLabel(infoLbls.players, "Jogadores: " .. #Players:GetPlayers())
+                    setLabel(infoLbls.time, "Sessão: " .. math.floor(os.clock() - t0) .. "s")
+                end)
+                task.wait(1)
+            end
+        end)
+    end
 
     local VU = game:GetService("VirtualUser")
     local afkConn = LP.Idled:Connect(function()
         if not BF.AntiAFK then return end
-        pcall(function()
-            VU:CaptureController()
-            VU:ClickButton2(Vector2.new())
-        end)
+        pcall(function() VU:CaptureController(); VU:ClickButton2(Vector2.new()) end)
     end)
 
-    -- limpeza ao descarregar o hub
     return function()
         alive = false
-        BF.Enabled = false
-        stopNoclip()
-        pcall(function() waterConn:Disconnect() end)
+        for _, k in ipairs({ "Enabled", "AutoChest", "AutoFruit", "AutoRaid", "SeaEvents", "KillAura", "AutoStats",
+            "AutoStore", "FruitWebhook", "FruitESP", "PlayerESP", "HopLow", "HuntFruit", "AutoAwaken", "Mastery", "Teleporting" }) do
+            BF[k] = false
+        end
+        chestCacheStop()
+        fpsBoost(false)
+        BF.Modes = {}
+        BF.AutoTravel, BF.AutoBuyChip, BF.CheapFruit = false, false, false
         pcall(function() afkConn:Disconnect() end)
     end
 end
