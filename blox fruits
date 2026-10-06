@@ -355,16 +355,21 @@ return function(ctx)
         end
     end
 
-    -- Auto Chest (com cache, sem varrer o workspace a cada ciclo)
+    -- Auto Chest (tag _ChestTagged, com cache, Stop Items e Bypass)
+    local CollectionService = game:GetService("CollectionService")
     local ChestCache, ChestConns = {}, {}
-    local function chestAdd(o)
-        if o:IsA("BasePart") and o.Name:find("Chest") then ChestCache[o] = true end
+    local function heldItem(n)
+        for _, c in ipairs({ LP.Backpack, LP.Character }) do
+            if c and c:FindFirstChild(n) then return true end
+        end
+        return false
     end
+    local function chestAdd(o) ChestCache[o] = true end
     local function chestCacheStart()
         if #ChestConns > 0 then return end
-        for _, o in ipairs(workspace:GetDescendants()) do chestAdd(o) end
-        ChestConns[1] = workspace.DescendantAdded:Connect(chestAdd)
-        ChestConns[2] = workspace.DescendantRemoving:Connect(function(o) ChestCache[o] = nil end)
+        for _, o in ipairs(CollectionService:GetTagged("_ChestTagged")) do chestAdd(o) end
+        ChestConns[1] = CollectionService:GetInstanceAddedSignal("_ChestTagged"):Connect(chestAdd)
+        ChestConns[2] = CollectionService:GetInstanceRemovedSignal("_ChestTagged"):Connect(function(o) ChestCache[o] = nil end)
     end
     local function chestCacheStop()
         for _, c in ipairs(ChestConns) do pcall(function() c:Disconnect() end) end
@@ -373,20 +378,46 @@ return function(ctx)
     end
     local function farmChests()
         if not BF.AutoChest then return end
+        if BF.StopOnItems and (heldItem("Fist of Darkness") or heldItem("God's Chalice")) then return end
         local h = getHRP(); if not h then return end
-        local best, bd
+        local best, bd, bpos
         for o in pairs(ChestCache) do
-            if o.Parent then
-                local d = (o.Position - h.Position).Magnitude
-                if not bd or d < bd then best, bd = o, d end
+            if o.Parent and not o:GetAttribute("IsDisabled") then
+                local ok, p = pcall(function() return o:GetPivot().Position end)
+                if ok then
+                    local d = (p - h.Position).Magnitude
+                    if not bd or d < bd then best, bd, bpos = o, d, p end
+                end
             else
                 ChestCache[o] = nil
             end
         end
         if best then
-            tp(best.Position)
+            tp(bpos)
             ChestCache[best] = nil
             task.wait(0.4)
+        end
+    end
+
+    -- Chest Bypass: teleporta direto para a Part do bau (Parts "Chest*" com TouchInterest)
+    local function chestBypassLoop()
+        local list = {}
+        for _, o in ipairs(game:GetDescendants()) do
+            if o.ClassName == "Part" and o.Name:find("Chest") then list[#list + 1] = o end
+        end
+        while BF.ChestBypass do
+            local h = getHRP()
+            local best, bd
+            if h then
+                for _, c in ipairs(list) do
+                    if c.Parent and c:FindFirstChild("TouchInterest") then
+                        local d = (c.Position - h.Position).Magnitude
+                        if not bd or d < bd then best, bd = c, d end
+                    end
+                end
+                if best then h.CFrame = best.CFrame end
+            end
+            task.wait(0.1)
         end
     end
 
@@ -397,6 +428,7 @@ return function(ctx)
         if BF.AutoX or force then table.insert(keys, Enum.KeyCode.X) end
         if BF.AutoC or force then table.insert(keys, Enum.KeyCode.C) end
         if BF.AutoV or force then table.insert(keys, Enum.KeyCode.V) end
+        if BF.AutoF or force then table.insert(keys, Enum.KeyCode.F) end
 
         for _, key in ipairs(keys) do
             pcall(function()
@@ -440,7 +472,45 @@ return function(ctx)
         return t
     end
 
+    -- Attack No Animation (RegisterAttack / RegisterHit, igual ao Banana Hub)
+    local function netHit()
+        local ch = LP.Character; if not ch then return end
+        local tool = ch:FindFirstChildOfClass("Tool"); if not tool then return end
+        local enemies = workspace:FindFirstChild("Enemies"); if not enemies then return end
+        local pivot = ch:GetPivot().Position
+        local inRange = {}
+        for _, e in ipairs(enemies:GetChildren()) do
+            local r = e:FindFirstChild("HumanoidRootPart")
+            local hum = e:FindFirstChildOfClass("Humanoid")
+            if r and hum and hum.Health > 0 and (r.Position - pivot).Magnitude <= 60 then inRange[#inRange + 1] = e end
+        end
+        if #inRange == 0 then return end
+        local lc = tool:FindFirstChild("LeftClickRemote")
+        if lc then
+            local n = 1
+            for _, e in ipairs(inRange) do
+                lc:FireServer((e.HumanoidRootPart.Position - pivot).Unit, n)
+                n = n + 1
+            end
+        else
+            local targets, main = {}, nil
+            for _, e in ipairs(inRange) do
+                if not e:GetAttribute("IsBoat") then
+                    local head = e:FindFirstChild("Head")
+                    if head then targets[#targets + 1] = { e, head }; main = head end
+                end
+            end
+            local mods = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
+            local net = mods and mods:FindFirstChild("Net")
+            if main and net then
+                local a, h = net:FindFirstChild("RE/RegisterAttack"), net:FindFirstChild("RE/RegisterHit")
+                if a and h then a:FireServer(0.1); h:FireServer(main, targets) end
+            end
+        end
+    end
+
     local function atk(t)
+        if BF.NetAttack then pcall(netHit) end
         if t then pcall(function() t:Activate() end) end
         local ok = pcall(function()
             local cam = workspace.CurrentCamera
@@ -770,8 +840,9 @@ return function(ctx)
         if usingFruit then return end
         local cf = getCommF(); if not cf then return end
         for _, t in ipairs(LP.Backpack:GetChildren()) do
-            if t:IsA("Tool") and t.ToolTip == "Blox Fruit" then
-                local nm = t:GetAttribute("OriginalName") or t.Name
+            if t:IsA("Tool") and (t.ToolTip == "Blox Fruit" or t.Name:match(" Fruit$")) then
+                local base = t.Name:match("^(.*) Fruit$")
+                local nm = base and (base .. "-" .. base) or (t:GetAttribute("OriginalName") or t.Name)
                 local ok, res = pcall(function() return cf:InvokeServer("StoreFruit", nm, t) end)
                 if ok then notify("Auto Store", tostring(nm) .. " -> " .. tostring(res), "success", 2) end
                 task.wait(0.5)
@@ -1347,6 +1418,11 @@ return function(ctx)
             elite = modeElite, indra = modeIndra, cake = modeCake, factory = modeFactory, ecto = modeEcto,
             kill = modeKill, island = modeIsland, nearest = modeNearest, berry = modeBerry,
         }
+        function Modes.add(name, fn)
+            if not MODE_FN[name] then MODE_ORDER[#MODE_ORDER + 1] = name end
+            MODE_FN[name] = fn
+        end
+        Modes.find, Modes.reach, Modes.fight = findEnemyLike, reach, fight
 
         local function modeTick()
             if not getHRP() then return end
@@ -1374,6 +1450,644 @@ return function(ctx)
             end
         end
         function Modes.info() return kills, eliteProgress, eliteStatus end
+    end
+
+    --================================================--
+    -- MODOS v2 (remotes, posicoes e nomes reais do Banana Hub)
+    --================================================--
+    do
+        local RS = game:GetService("ReplicatedStorage")
+        local VU2 = game:GetService("VirtualUser")
+        local find, reach, fight0 = Modes.find, Modes.reach, Modes.fight
+        local S = { kills = 0, cakeText = nil, eliteProgress = 0, eliteStatus = "Not Found" }
+        Modes.S = S
+        BF.AutoF, BF.NetAttack, BF.StopOnItems, BF.ChestBypass = false, false, false, false
+        BF.BoneQuest, BF.AutoFishing, BF.FishRod = false, false, "Fishing Rod"
+        BF._conns = {}
+
+        function Modes.info()
+            return S.cakeText or tostring(S.kills), S.eliteProgress, S.eliteStatus
+        end
+
+        local function V(x, y, z) return Vector3.new(x, y, z) end
+
+        local function fight(mob, q)
+            fight0(mob, q)
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            if not mob.Parent or (hum and hum.Health <= 0) then S.kills = S.kills + 1 end
+        end
+
+        local function hasItem(n)
+            for _, c in ipairs({ LP.Backpack, LP.Character }) do
+                if c and c:FindFirstChild(n) then return true end
+            end
+            return false
+        end
+        local function equipNamed(n)
+            local t = LP.Backpack:FindFirstChild(n)
+            local _, h = GetChar(LP)
+            if t and h then pcall(function() h:EquipTool(t) end) end
+        end
+        local function liveIn(name)
+            local e = workspace:FindFirstChild("Enemies")
+            local m = e and e:FindFirstChild(name)
+            local hum = m and m:FindFirstChildOfClass("Humanoid")
+            if m and hum and hum.Health > 0 and getRoot(m) then return m end
+            return nil
+        end
+        local function rsModelPos(name)
+            local m = RS:FindFirstChild(name)
+            local r = m and m:FindFirstChild("HumanoidRootPart")
+            return r and r.Position or nil
+        end
+        local function near(pos, r)
+            local h = getHRP()
+            return h ~= nil and (h.Position - pos).Magnitude <= r
+        end
+        local function click()
+            pcall(function()
+                VU2:CaptureController()
+                VU2:Button1Down(Vector2.new(1280, 600))
+                VU2:Button1Up(Vector2.new(1280, 600))
+            end)
+        end
+        local function baseName(n) return n:match("^(.-)%s*%[") or n end
+        local function questForMob(name)
+            local best
+            local l = getLvl() or 0
+            for _, q in ipairs(QUESTS) do
+                if q.mob:lower() == name:lower() and l >= q.minLevel then best = q end
+            end
+            return best
+        end
+
+        -- viagem com portais (requestEntrance) quando o destino esta longe
+        local PORTALS = {
+            [1] = { V(-4652, 873, -1754), V(-7895, 5547, -380), V(61164, 5, 1820), V(3865, 5, -1926) },
+            [2] = { V(-317, 331, 597), V(2283, 15, 867), V(923, 125, 32853), V(-6509, 83, -133) },
+            [3] = { V(-12471, 374, -7551), V(5659, 1013, -341), V(-5092, 315, -3130), V(-12001, 332, -8861), V(5319, 23, -93), V(28286, 14897, 103) },
+        }
+        local function travel(pos)
+            local h = getHRP(); if not h then return end
+            local mine = (h.Position - pos).Magnitude
+            if mine > 1500 then
+                local best, bd
+                for _, p in ipairs(PORTALS[Sea] or {}) do
+                    local d = (p - pos).Magnitude
+                    if not bd or d < bd then best, bd = p, d end
+                end
+                if best and bd <= mine then
+                    local cf = getCommF()
+                    if cf then pcall(function() cf:InvokeServer("requestEntrance", best) end) end
+                    task.wait(0.5)
+                    local h2 = getHRP()
+                    if h2 then pcall(function() h2.CFrame = h2.CFrame + Vector3.new(0, 50, 0) end) end
+                end
+            end
+            goTo(pos, 120)
+        end
+        Modes.travel = travel
+
+        -- Ectoplasm (Cursed Ship)
+        Modes.add("ecto", function()
+            if Sea ~= 2 then return false end
+            local mob = find({ "ship deckhand", "ship engineer", "ship steward", "ship officer" })
+            if mob then
+                if reach(mob) then fight(mob) end
+                return true
+            end
+            travel(V(911.36, 126, 33159.54))
+            task.wait(1)
+            return true
+        end)
+
+        -- Factory (boss Core)
+        Modes.add("factory", function()
+            if Sea ~= 2 then return false end
+            local mob = liveIn("Core")
+            if mob then
+                if reach(mob) then fight(mob) end
+                return true
+            end
+            travel(V(448.47, 199.36, -441.39))
+            task.wait(1)
+            return true
+        end)
+
+        -- Elite Hunter
+        local ELITE_NAMES = { "Diablo", "Deandre", "Urban" }
+        local nextProg = 0
+        Modes.add("elite", function()
+            if Sea ~= 3 then S.eliteStatus = "So no Terceiro Mar"; return false end
+            local cf = getCommF(); if not cf then return false end
+            if os.clock() >= nextProg then
+                nextProg = os.clock() + 3
+                pcall(function()
+                    local p = cf:InvokeServer("EliteHunter", "Progress")
+                    if p ~= nil then S.eliteProgress = p end
+                end)
+            end
+            if hasQ() then
+                for _, n in ipairs(ELITE_NAMES) do
+                    local m = liveIn(n)
+                    if m then
+                        S.eliteStatus = "Found: " .. n
+                        if reach(m) then fight(m) end
+                        return true
+                    end
+                end
+                for _, n in ipairs(ELITE_NAMES) do
+                    local p = rsModelPos(n)
+                    if p then
+                        S.eliteStatus = "A ir: " .. n
+                        travel(p + V(2, 20, 2))
+                        return true
+                    end
+                end
+                S.eliteStatus = "Quest ativa, a procurar"
+                task.wait(1)
+                return true
+            end
+            local ok, res = pcall(function() return cf:InvokeServer("EliteHunter") end)
+            S.eliteStatus = "Not Found"
+            if ok and type(res) == "string" and res:find("I don't have anything", 1, true) and BF.EliteHop then
+                serverHop("random")
+            end
+            task.wait(1.5)
+            return true
+        end)
+
+        -- Rip Indra
+        Modes.add("indra", function()
+            if Sea ~= 3 then return false end
+            local m = liveIn("rip_indra True Form") or liveIn("rip_indra")
+            if m then
+                if reach(m) then fight(m) end
+                return true
+            end
+            local p = rsModelPos("rip_indra True Form")
+            if p then
+                travel(p + V(0, 10, 0))
+                task.wait(0.5)
+                return true
+            end
+            return false
+        end)
+        Modes.add("indra_sum", function()
+            if Sea ~= 3 then return false end
+            if hasItem("God's Chalice") then
+                travel(V(-5563.75, 320.43, -2662.51))
+                equipNamed("God's Chalice")
+                click()
+                task.wait(0.5)
+                return true
+            end
+            local p = rsModelPos("rip_indra True Form")
+            if p then travel(p + V(0, 10, 0)); return true end
+            return false
+        end)
+
+        -- Touch Pad Haki (Rip Indra)
+        local HAKI_STEPS = {
+            { "Winter Sky", V(-5420.17, 1084.97, -2666.82) },
+            { "Pure Red", V(-5414.41, 309.87, -2212.46) },
+            { "Snow White", V(-4971.48, 331.57, -3720.03) },
+        }
+        Modes.add("haki", function()
+            if Sea ~= 3 then return false end
+            local cf = getCommF(); if not cf then return false end
+            for _, step in ipairs(HAKI_STEPS) do
+                if not BF.Modes.haki then return true end
+                pcall(function() cf:InvokeServer("activateColor", step[1]) end)
+                task.wait(0.5)
+                for _ = 1, 30 do
+                    if not BF.Modes.haki or near(step[2], 10) then break end
+                    travel(step[2])
+                    task.wait(0.2)
+                end
+                task.wait(0.5)
+            end
+            click(); task.wait(1); click()
+            BF.Modes.haki = nil
+            notify("Haki", "Sequencia concluida", "success", 3)
+            return true
+        end)
+
+        -- Cake Prince
+        local CAKE_MOBS = { "cookie crafter", "cake guard", "baking staff", "head baker" }
+        local nextCake = 0
+        Modes.add("cake", function()
+            if Sea ~= 3 then return false end
+            local cf = getCommF(); if not cf then return false end
+            if BF.CakeSpawn and os.clock() >= nextCake then
+                nextCake = os.clock() + 2
+                local ok, res = pcall(function() return cf:InvokeServer("CakePrinceSpawner") end)
+                if ok and type(res) == "string" then
+                    local n = #res
+                    if n == 88 then S.cakeText = res:sub(39, 41)
+                    elseif n == 87 then S.cakeText = res:sub(39, 40)
+                    elseif n == 86 then S.cakeText = res:sub(39, 39)
+                    else S.cakeText = "Cake Prince pronto" end
+                end
+            end
+            local prince = liveIn("Cake Prince")
+            if prince then
+                if reach(prince) then fight(prince) end
+                return true
+            end
+            if RS:FindFirstChild("Cake Prince") then
+                local ok, tr = pcall(function() return workspace.Map.CakeLoaf.BigMirror.Other.Transparency end)
+                if ok and tr == 0 and not near(V(-1990.67, 4532.99, -14973.67), 2000) then
+                    travel(V(-2151.82, 149.32, -12404.91))
+                    return true
+                end
+            end
+            local mob = find(CAKE_MOBS)
+            if mob then
+                local q
+                if BF.CakeQuest then q = questForMob(baseName(mob.Name)) end
+                if q and not ensureQuest(q) then return true end
+                if reach(mob) then fight(mob, q) end
+                return true
+            end
+            travel(V(-2077, 252, -12373))
+            task.wait(1)
+            return true
+        end)
+
+        -- Berry (tag BerryBush + ProximityPrompt)
+        local CS = game:GetService("CollectionService")
+        Modes.add("berry", function()
+            local h = getHRP(); if not h then return false end
+            local best, bd, bpos
+            for _, b in ipairs(CS:GetTagged("BerryBush")) do
+                if next(b:GetAttributes()) ~= nil then
+                    local ok, p = pcall(function() return b.Parent:GetPivot().Position end)
+                    if ok then
+                        local d = (p - h.Position).Magnitude
+                        if not bd or d < bd then best, bd, bpos = b, d, p end
+                    end
+                end
+            end
+            if not best then
+                if BF.BerryHop then serverHop("random") end
+                return false
+            end
+            if bd > 5 then travel(bpos) end
+            for _, berry in ipairs(best:GetChildren()) do
+                local pp = berry:FindFirstChild("ProximityPrompt")
+                if pp then
+                    pcall(function() goTo(berry.WorldPivot.Position, 20) end)
+                    pcall(fireproximityprompt, pp, 1)
+                end
+            end
+            task.wait(0.3)
+            return true
+        end)
+
+        -- Farm Bone
+        Modes.add("bone", function()
+            if Sea ~= 3 then return false end
+            local mob = find({ "reborn skeleton", "living zombie", "demonic soul", "posessed mummy" }, true)
+            if mob then
+                local q
+                if BF.BoneQuest then q = questForMob(baseName(mob.Name)) end
+                if q and not ensureQuest(q) then return true end
+                if reach(mob) then fight(mob, q) end
+                return true
+            end
+            for _, n in ipairs({ "Reborn Skeleton", "Living Zombie", "Demonic Soul", "Posessed Mummy" }) do
+                local p = rsModelPos(n)
+                if p then travel(p + V(2, 20, 2)); return true end
+            end
+            travel(V(-9506.23, 172.13, 6117.08))
+            task.wait(1)
+            return true
+        end)
+
+        -- Tyrant of the Skies
+        Modes.add("tyrant", function()
+            if Sea ~= 3 then return false end
+            local m = liveIn("Tyrant of the Skies")
+            if m then
+                if reach(m) then fight(m) end
+                return true
+            end
+            local p = rsModelPos("Tyrant of the Skies")
+            if p then travel(p + V(0, 30, 0)); task.wait(0.5); return true end
+            travel(V(-5875, 620, 315))
+            task.wait(2)
+            return true
+        end)
+
+        -- Farm Material
+        local MATERIALS = {
+            [1] = {
+                ["Leather + Scrap Metal"] = { { "brute", "pirate" }, V(-1145, 15, 4350) },
+                ["Angel Wings"] = { { "shanda", "royal squad", "royal soldier", "wysper", "thunder god" }, V(-4698, 845, -1912) },
+                ["Magma Ore"] = { { "military soldier", "military spy", "magma admiral" }, V(-5815, 84, 8820) },
+                ["Fish Tail"] = { { "fishman warrior", "fishman commando", "fishman lord" }, V(61123, 19, 1569) },
+            },
+            [2] = {
+                ["Leather + Scrap Metal"] = { { "marine captain" }, V(-2010.5, 73, -3326.62) },
+                ["Magma Ore"] = { { "magma ninja", "lava pirate" }, V(-5428, 78, -5959) },
+                ["Ectoplasm"] = { { "ship deckhand", "ship engineer", "ship steward", "ship officer" }, V(911.36, 126, 33159.54) },
+                ["Mystic Droplet"] = { { "water fighter" }, V(-3385, 239, -10542) },
+                ["Radioactive Material"] = { { "factory staff" }, V(295, 73, -56) },
+                ["Vampire Fang"] = { { "vampire" }, V(-6033, 7, -1317) },
+            },
+            [3] = {
+                ["Leather + Scrap Metal"] = { { "jungle pirate", "forest pirate" }, V(-11975.79, 331.77, -10620.03) },
+                ["Fish Tail"] = { { "fishman raider", "fishman captain" }, V(-10993, 332, -8940) },
+                ["Conjured Cocoa"] = { { "chocolate bar battler", "cocoa warrior" }, V(620.63, 78.94, -12581.37) },
+                ["Dragon Scale"] = { { "dragon crew warrior" }, V(6594, 383, 139) },
+                ["Gunpowder"] = { { "pistol billionaire" }, V(-469, 74, 5904) },
+                ["Mini Tusk"] = { { "mythological pirate" }, V(-13545, 470, -6917) },
+            },
+        }
+        Modes.materialList = {}
+        for n in pairs(MATERIALS[Sea] or {}) do Modes.materialList[#Modes.materialList + 1] = n end
+        table.sort(Modes.materialList)
+        BF.Material = Modes.materialList[1]
+        Modes.add("material", function()
+            local e = (MATERIALS[Sea] or {})[BF.Material or ""]
+            if not e then return false end
+            local mob = find(e[1], true)
+            if mob then
+                if reach(mob) then fight(mob) end
+                return true
+            end
+            travel(e[2])
+            task.wait(1)
+            return true
+        end)
+
+        -- Pirate Raid (Terceiro Mar)
+        Modes.add("pirate", function()
+            if Sea ~= 3 then return false end
+            local h = getHRP(); if not h then return false end
+            if near(V(-5539.31, 313.8, -2972.37), 500) then
+                local mob = find({ "" })
+                if mob and near(getRoot(mob).Position, 2000) then
+                    if reach(mob) then fight(mob) end
+                end
+                return true
+            end
+            travel(V(-5122, 315, -2963))
+            return true
+        end)
+
+        -- Attack All Mob and Boss
+        local KILLALL = {
+            [1] = { "the gorilla king", "bobby", "yeti", "mob leader", "vice admiral", "warden", "chief warden", "swan",
+                "magma admiral", "fishman lord", "wysper", "thunder god", "cyborg", "saber expert",
+                "bandit", "monkey", "gorilla", "pirate", "brute", "desert bandit", "desert officer", "snow bandit",
+                "snowman", "chief petty officer", "sky bandit", "dark master", "prisoner", "dangerous prisoner",
+                "toga warrior", "gladiator", "military soldier", "military spy", "fishman warrior", "fishman commando",
+                "god's guard", "shanda", "royal squad", "royal soldier", "galley pirate", "galley captain" },
+            [2] = { "diamond", "jeremy", "fajita", "don swan", "smoke admiral", "cursed captain", "darkbeard", "order",
+                "awakened ice admiral", "tide keeper",
+                "raider", "mercenary", "swan pirate", "factory staff", "marine lieutenant", "marine captain", "zombie",
+                "vampire", "snow trooper", "winter warrior", "lab subordinate", "horned warrior", "magma ninja",
+                "lava pirate", "ship deckhand", "ship engineer", "ship steward", "ship officer", "arctic warrior",
+                "snow lurker", "sea soldier", "water fighter" },
+            [3] = { "stone", "hydra leader", "kilo admiral", "captain elephant", "beautiful pirate", "rip_indra true form",
+                "longma", "soul reaper", "cake queen",
+                "pirate millionaire", "dragon crew warrior", "dragon crew archer", "hydra enforcer",
+                "venomous assailant", "marine commodore", "marine rear admiral", "fishman raider", "fishman captain",
+                "forest pirate", "mythological pirate", "jungle pirate", "musketeer pirate", "reborn skeleton",
+                "living zombie", "demonic soul", "posessed mummy", "peanut scout", "peanut president",
+                "ice cream chef", "ice cream commander", "cookie crafter", "cake guard", "baking staff", "head baker",
+                "cocoa warrior", "chocolate bar battler", "sweet thief", "candy rebel", "candy pirate", "snow demon",
+                "isle outlaw", "island boy", "sun-kissed warrior", "isle champion", "serpent hunter", "skull slayer" },
+        }
+        Modes.add("killall", function()
+            local m = find(KILLALL[Sea] or {}, true)
+            if not m then return false end
+            if reach(m) then fight(m) end
+            return true
+        end)
+
+        -- Dojo Trainer (Terceiro Mar)
+        Modes.add("dojo", function()
+            if Sea ~= 3 then return false end
+            local pos = V(5855.2, 1208.32, 872.71)
+            if not near(pos, 5) then travel(pos); return true end
+            local ok, net = pcall(function() return RS.Modules.Net["RF/InteractDragonQuest"] end)
+            if ok and net then
+                pcall(function() net:InvokeServer({ NPC = "Dojo Trainer", Command = "ClaimQuest" }) end)
+                task.wait(1)
+                pcall(function() net:InvokeServer({ NPC = "Dojo Trainer", Command = "RequestQuest" }) end)
+            end
+            task.wait(2)
+            return true
+        end)
+
+        -- Darkbeard (Segundo Mar)
+        Modes.add("darkbeard", function()
+            if Sea ~= 2 then return false end
+            local m = liveIn("Darkbeard")
+            if not m then return false end
+            if reach(m) then fight(m) end
+            return true
+        end)
+        Modes.add("darkbeard_sum", function()
+            if Sea ~= 2 then return false end
+            if hasItem("Fist of Darkness") then
+                travel(V(3778.58, 15.79, -3499.4))
+                equipNamed("Fist of Darkness")
+                click()
+                task.wait(0.5)
+                return true
+            end
+            local p = rsModelPos("Darkbeard")
+            if p then travel(p + V(0, 10, 0)); return true end
+            return false
+        end)
+
+        -- Soul Reaper (Terceiro Mar)
+        Modes.add("soulreaper", function()
+            if Sea ~= 3 then return false end
+            local m = find({ "soul reaper" })
+            if not m then return false end
+            if reach(m) then fight(m) end
+            return true
+        end)
+        Modes.add("soulreaper_sum", function()
+            if Sea ~= 3 then return false end
+            if hasItem("Hallow Essence") then
+                local pos = V(-8932.32, 146.83, 6062.55)
+                if not near(pos, 8) then travel(pos); return true end
+                equipNamed("Hallow Essence")
+                click()
+                task.wait(0.5)
+                return true
+            end
+            local p = rsModelPos("Soul Reaper")
+            if p then travel(p + V(2, 20, 2)); return true end
+            return false
+        end)
+
+        -- Dough King (Terceiro Mar)
+        Modes.add("dough", function()
+            if Sea ~= 3 then return false end
+            local m = liveIn("Dough King")
+            if m then
+                if reach(m) then fight(m) end
+                return true
+            end
+            if RS:FindFirstChild("Dough King") then
+                travel(V(-2009.28, 4532.97, -14937.31))
+                return true
+            end
+            return false
+        end)
+        Modes.add("dough_sum", function()
+            if Sea ~= 3 then return false end
+            local cf = getCommF(); if not cf then return false end
+            if hasItem("God's Chalice") then
+                local ok, res = pcall(function() return cf:InvokeServer("SweetChaliceNpc") end)
+                if ok and type(res) == "string" and res:find("Where", 1, true) then
+                    notify("Dough King", "Materiais insuficientes", "warn", 2)
+                end
+                task.wait(1)
+                return true
+            end
+            if hasItem("Sweet Chalice") then
+                local ok, res = pcall(function() return cf:InvokeServer("CakePrinceSpawner") end)
+                if ok and type(res) == "string" and res:find("Do you want to open the portal now?", 1, true) then
+                    pcall(function() cf:InvokeServer("CakePrinceSpawner") end)
+                    return true
+                end
+                if RS:FindFirstChild("Cake Prince") then return true end
+                local mob = find(CAKE_MOBS)
+                if mob then
+                    if reach(mob) then fight(mob) end
+                    return true
+                end
+                travel(V(-1820.06, 210.75, -12297.5))
+                task.wait(1)
+                return true
+            end
+            if hasItem("Red Key") then
+                pcall(function() cf:InvokeServer("CakeScientist", "Check") end)
+                task.wait(1)
+                return true
+            end
+            if hasQ() then
+                for _, n in ipairs(ELITE_NAMES) do
+                    local m = liveIn(n)
+                    if m then
+                        if reach(m) then fight(m) end
+                        return true
+                    end
+                end
+            end
+            return false
+        end)
+
+        -- Auto New World (Primeiro Mar)
+        Modes.add("newworld", function()
+            if Sea ~= 1 or (getLvl() or 0) < 700 then return false end
+            local cf = getCommF(); if not cf then return false end
+            local ok, door = pcall(function() return workspace.Map.Ice.Door end)
+            if ok and door and door.CanCollide == false and door.Transparency == 1 then
+                travel(V(4849.3, 5.65, 719.61))
+                task.wait(1.1)
+                pcall(function() cf:InvokeServer("DressrosaQuestProgress", "Detective") end)
+                task.wait(0.1)
+                equipNamed("Key")
+                travel(V(1347.71, 37.38, -1325.65))
+                return true
+            end
+            local boss = liveIn("Ice Admiral")
+            if boss then
+                if reach(boss) then fight(boss) end
+                return true
+            end
+            local p = rsModelPos("Ice Admiral")
+            if p then travel(p + V(5, 10, 7)); return true end
+            pcall(function() cf:InvokeServer("TravelDressrosa") end)
+            task.wait(2)
+            return true
+        end)
+
+        -- Auto Third Sea (Segundo Mar)
+        Modes.add("thirdsea", function()
+            if Sea ~= 2 or (getLvl() or 0) < 1500 then return false end
+            local cf = getCommF(); if not cf then return false end
+            local okp, prog = pcall(function() return cf:InvokeServer("ZQuestProgress", "General") end)
+            if not (okp and prog == 0) then return false end
+            local pos = V(-1926.32, 12.82, 1738.31)
+            travel(pos)
+            if near(pos, 10) then
+                task.wait(1.1)
+                pcall(function() cf:InvokeServer("ZQuestProgress", "Begin") end)
+            end
+            task.wait(1.3)
+            local boss = liveIn("rip_indra")
+            if boss then
+                if reach(boss) then fight(boss) end
+                pcall(function() cf:InvokeServer("TravelZou") end)
+                return true
+            end
+            if near(V(-26880.93, 22.85, 473.19), 1000) then travel(V(-26880.93, 22.85, 473.19)) end
+            return true
+        end)
+
+        -- Fishing (FishReplicated.FishingRequest)
+        function Modes.fishing()
+            local fr = RS:FindFirstChild("FishReplicated")
+            local req = fr and fr:FindFirstChild("FishingRequest")
+            if not req then
+                notify("Fishing", "FishReplicated nao encontrado neste servidor", "warn", 3)
+                BF.AutoFishing = false
+                return
+            end
+            local okW, getWater = pcall(function() return require(RS.Util.GetWaterHeightAtLocation) end)
+            local okC, maxDist = pcall(function() return require(fr.FishingClient.Config).Rod.MaxLaunchDistance end)
+            if not okW then getWater = function() return 0 end end
+            if not okC then maxDist = 60 end
+            while BF.AutoFishing do
+                pcall(function()
+                    local ch = LP.Character
+                    local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+                    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                    local head = ch and ch:FindFirstChild("Head")
+                    if not hrp or not hum or not head then return end
+                    local tool = ch:FindFirstChildOfClass("Tool")
+                    if BF.FishRod and (not tool or tool.Name ~= BF.FishRod) then
+                        local rod = LP.Backpack:FindFirstChild(BF.FishRod)
+                        if rod then hum:EquipTool(rod); tool = rod end
+                    end
+                    if not tool then return end
+                    local water = getWater(hrp.Position)
+                    local ignore = { ch }
+                    for _, n in ipairs({ "Characters", "Enemies" }) do
+                        local f = workspace:FindFirstChild(n)
+                        if f then ignore[#ignore + 1] = f end
+                    end
+                    local rp = RaycastParams.new()
+                    rp.FilterType = Enum.RaycastFilterType.Exclude
+                    rp.FilterDescendantsInstances = ignore
+                    local dir = hrp.CFrame.LookVector * maxDist
+                    local r = workspace:Raycast(head.Position, dir, rp)
+                    local hit = r and r.Position or (head.Position + dir)
+                    hit = Vector3.new(hit.X, math.max(hit.Y, water), hit.Z)
+                    local st, sv = tool:GetAttribute("State"), tool:GetAttribute("ServerState")
+                    if st == "ReeledIn" or sv == "ReeledIn" then
+                        req:InvokeServer("StartCasting")
+                        task.wait()
+                        req:InvokeServer("CastLineAtLocation", hit, 100, true)
+                    elseif sv == "Biting" then
+                        req:InvokeServer("Catching", true)
+                        task.wait(0.1)
+                        req:InvokeServer("Catch", 1)
+                    end
+                end)
+                task.wait()
+            end
+        end
     end
 
     --================================================--
@@ -1505,6 +2219,18 @@ return function(ctx)
         infoLbls.players = sSrv:AddLabel("Jogadores: ...")
         infoLbls.job = sSrv:AddLabel("JobId: " .. tostring(game.JobId))
         infoLbls.time = sSrv:AddLabel("Sessão: 0s")
+        local sEv = infoTab:AddSection("Eventos e Bosses")
+        infoLbls.mirage = sEv:AddLabel("Mirage Island: ...")
+        infoLbls.kitsune = sEv:AddLabel("Kitsune Island: ...")
+        infoLbls.prehist = sEv:AddLabel("Prehistoric Island: ...")
+        infoLbls.frozen = sEv:AddLabel("Frozen Dimension: ...")
+        infoLbls.tyrant = sEv:AddLabel("Tyrant of the Skies: ...")
+        infoLbls.rip = sEv:AddLabel("Rip Indra: ...")
+        infoLbls.dough = sEv:AddLabel("Dough King: ...")
+        infoLbls.elite2 = sEv:AddLabel("Elite Hunter: ...")
+        infoLbls.lever = sEv:AddLabel("Pull Lever: ...")
+        infoLbls.moon = sEv:AddLabel("Lua: ...")
+        infoLbls.bones = sEv:AddLabel("Bones: ...")
     end
 
     ------------------------------------------------------------------ ABA: AUTO FARM
@@ -1809,6 +2535,7 @@ return function(ctx)
         sSrv:AddButton({ Name = "Hop to Lowest Pings Server", Callback = function() task.spawn(serverHop, "ping") end })
         local hasJobInput = addInput(sSrv, "Input Job Id", "JobIdInput", "cola o JobId aqui", function(v)
             jobInput = (tostring(v or ""):gsub("%s+", ""))
+            BF.JobInput = jobInput
         end)
         if hasJobInput then
             sSrv:AddButton({ Name = "Join Job Id", Callback = function()
@@ -1841,6 +2568,355 @@ return function(ctx)
         end)
     end
 
+    do
+        local RS = game:GetService("ReplicatedStorage")
+        local CS = game:GetService("CollectionService")
+        local function V(x, y, z) return Vector3.new(x, y, z) end
+        local function call(...)
+            local a = { ... }
+            local cf = getCommF()
+            if cf then pcall(function() cf:InvokeServer(table.unpack(a)) end) end
+        end
+
+        ------------------------------------------------------------ Farm: metodos e bosses
+        local sMeth = bfTab:AddSection("Métodos de Farm (Banana Hub)")
+        sMeth:AddToggle({ Name = "Farm Bone (Mar 3)", Default = false, Flag = "ModeBone", Callback = function(v) Modes.set("bone", v) end })
+        sMeth:AddToggle({ Name = "Bone: aceitar quest", Default = false, Flag = "BoneQuest", Callback = function(v) BF.BoneQuest = v end })
+        sMeth:AddToggle({ Name = "Farm Tyrant of the Skies (Mar 3)", Default = false, Flag = "ModeTyrant", Callback = function(v) Modes.set("tyrant", v) end })
+        sMeth:AddDropdown({ Name = "Material", Options = Modes.materialList, Default = Modes.materialList[1], Flag = "MaterialPick", Callback = function(v) BF.Material = v end })
+        sMeth:AddToggle({ Name = "Farm Material", Default = false, Flag = "ModeMaterial", Callback = function(v) Modes.set("material", v) end })
+        sMeth:AddToggle({ Name = "Auto Pirate Raid (Mar 3)", Default = false, Flag = "ModePirate", Callback = function(v) Modes.set("pirate", v) end })
+        sMeth:AddToggle({ Name = "Auto Attack All Mob and Boss", Default = false, Flag = "ModeKillAll", Callback = function(v) Modes.set("killall", v) end })
+        sMeth:AddToggle({ Name = "Auto Quest Dojo Trainer (Mar 3)", Default = false, Flag = "ModeDojo", Callback = function(v) Modes.set("dojo", v) end })
+        sMeth:AddButton({ Name = "Quest Dragon Hunter", Callback = function()
+            spawnOnce("dragonhunter", function()
+                call("requestEntrance", V(5661.53, 1013.09, -334.96))
+                task.wait(0.5)
+                BF.Teleporting = true
+                goTo(V(5814.43, 1208.33, 884.58), 60)
+                BF.Teleporting = false
+            end)
+        end })
+
+        local sStack = bfTab:AddSection("Auto World")
+        sStack:AddToggle({ Name = "Auto New World (Mar 1, Lv 700+)", Default = false, Flag = "ModeNewWorld", Callback = function(v) Modes.set("newworld", v) end })
+        sStack:AddToggle({ Name = "Auto Third World (Mar 2, Lv 1500+)", Default = false, Flag = "ModeThirdSea", Callback = function(v) Modes.set("thirdsea", v) end })
+
+        local sBoss = bfTab:AddSection("Bosses")
+        sBoss:AddToggle({ Name = "Summon Rip Indra (God's Chalice)", Default = false, Flag = "ModeIndraSum", Callback = function(v) Modes.set("indra_sum", v) end })
+        sBoss:AddToggle({ Name = "Auto Touch Pad Haki (Rip Indra)", Default = false, Flag = "ModeHaki", Callback = function(v) Modes.set("haki", v) end })
+        sBoss:AddToggle({ Name = "Attack Darkbeard (Mar 2)", Default = false, Flag = "ModeDarkbeard", Callback = function(v) Modes.set("darkbeard", v) end })
+        sBoss:AddToggle({ Name = "Summon Darkbeard (Fist of Darkness)", Default = false, Flag = "ModeDarkbeardSum", Callback = function(v) Modes.set("darkbeard_sum", v) end })
+        sBoss:AddToggle({ Name = "Attack Soul Reaper (Mar 3)", Default = false, Flag = "ModeSoul", Callback = function(v) Modes.set("soulreaper", v) end })
+        sBoss:AddToggle({ Name = "Summon Soul Reaper (Hallow Essence)", Default = false, Flag = "ModeSoulSum", Callback = function(v) Modes.set("soulreaper_sum", v) end })
+        sBoss:AddToggle({ Name = "Attack Dough King (Mar 3)", Default = false, Flag = "ModeDough", Callback = function(v) Modes.set("dough", v) end })
+        sBoss:AddToggle({ Name = "Summon Dough King", Default = false, Flag = "ModeDoughSum", Callback = function(v) Modes.set("dough_sum", v) end })
+
+        local sCombat = bfTab:AddSection("Combate Extra")
+        sCombat:AddToggle({ Name = "Attack No Animation (Net)", Default = false, Flag = "NetAttack", Callback = function(v) BF.NetAttack = v end })
+        sCombat:AddToggle({ Name = "Usar F (skill de fruta)", Default = false, Flag = "AutoF", Callback = function(v) BF.AutoF = v end })
+
+        ------------------------------------------------------------ Fishing
+        local sFish = utilTab:AddSection("Fishing")
+        sFish:AddDropdown({ Name = "Select Bait", Options = { "Basic Bait", "Kelp Bait", "Good Bait", "Abyssal Bait", "Frozen Bait", "Epic Bait", "Carnivore Bait" }, Default = "Basic Bait", Flag = "FishBait", Callback = function(v)
+            pcall(function() RS.FishReplicated.FishingRequest:InvokeServer("SelectBait", v) end)
+        end })
+        sFish:AddDropdown({ Name = "Select Rod", Options = { "Fishing Rod", "Gold Rod", "Shark Rod", "Shell Rod", "Treasure Rod" }, Default = "Fishing Rod", Flag = "FishRod", Callback = function(v) BF.FishRod = v end })
+        sFish:AddToggle({ Name = "Auto Fishing", Default = false, Flag = "AutoFishing", Callback = function(v)
+            BF.AutoFishing = v
+            if v then spawnOnce("fishing", Modes.fishing) end
+        end })
+
+        ------------------------------------------------------------ Frutas / baus
+        local sFr = utilTab:AddSection("Fruit & Chest - Extra")
+        sFr:AddToggle({ Name = "Random Devil Fruit (Cousin)", Default = false, Flag = "RandomFruit", Callback = function(v)
+            BF.RandomFruit = v
+            if v then loopFlag("randfruit", "RandomFruit", function() call("Cousin", "Buy") end, 1) end
+        end })
+        sFr:AddToggle({ Name = "Chest: parar com Fist/Chalice", Default = false, Flag = "StopOnItems", Callback = function(v) BF.StopOnItems = v end })
+        sFr:AddToggle({ Name = "Chest Bypass (teleporte direto) [Risco]", Default = false, Flag = "ChestBypass", Callback = function(v)
+            BF.ChestBypass = v
+            if v then spawnOnce("chestbypass", chestBypassLoop) end
+        end })
+
+        ------------------------------------------------------------ Player extra
+        local sPl = utilTab:AddSection("Player - Extra")
+        BF._conns[#BF._conns + 1] = RunService.Stepped:Connect(function()
+            if not BF.Noclip then return end
+            local ch = LP.Character
+            if ch then
+                for _, p in ipairs(ch:GetDescendants()) do
+                    if p:IsA("BasePart") then p.CanCollide = false end
+                end
+            end
+        end)
+        sPl:AddToggle({ Name = "Noclip", Default = false, Flag = "Noclip", Callback = function(v) BF.Noclip = v end })
+        sPl:AddToggle({ Name = "Auto Observation (Ken)", Default = false, Flag = "AutoKen", Callback = function(v)
+            BF.AutoKen = v
+            if v then
+                loopFlag("autoken", "AutoKen", function()
+                    local ch = LP.Character
+                    if ch and not CS:HasTag(ch, "Ken") then
+                        RS.Remotes.CommE:FireServer("Ken", true)
+                    end
+                end, 0.3)
+            end
+        end })
+        sPl:AddToggle({ Name = "Auto V4 (tecla Y)", Default = false, Flag = "AutoV4", Callback = function(v)
+            BF.AutoV4 = v
+            if v then
+                loopFlag("autov4", "AutoV4", function()
+                    local ch = LP.Character
+                    if ch and ch:FindFirstChild("RaceEnergy") and ch:FindFirstChild("RaceTransformed")
+                        and ch.RaceEnergy.Value >= 1 and not ch.RaceTransformed.Value then
+                        VIM:SendKeyEvent(true, "Y", false, game)
+                        task.wait(0.1)
+                        VIM:SendKeyEvent(false, "Y", false, game)
+                    end
+                end, 0.5)
+            end
+        end })
+        sPl:AddToggle({ Name = "Auto V3 (ativa ao ligar)", Default = false, Flag = "AutoV3", Callback = function(v)
+            if v then pcall(function() RS.Remotes.CommE:FireServer("ActivateAbility") end) end
+        end })
+        sPl:AddDropdown({ Name = "Equipa", Options = { "Pirates", "Marines" }, Default = "Pirates", Flag = "TeamPick", Callback = function(v) BF.Team = v end })
+        sPl:AddButton({ Name = "Mudar de equipa", Callback = function() call("SetTeam", BF.Team or "Pirates") end })
+        sPl:AddButton({ Name = "Abrir Títulos", Callback = function()
+            call("getTitles")
+            pcall(function() LP.PlayerGui.Main.Titles.Visible = true end)
+        end })
+        sPl:AddButton({ Name = "Abrir Cores", Callback = function()
+            pcall(function() LP.PlayerGui.Main.Colors.Visible = true end)
+        end })
+        sPl:AddButton({ Name = "Parar todos os modos", Callback = function()
+            BF.Modes = {}
+            BF.Teleporting = false
+            notify("Modos", "Todos os modos extra parados", "warn", 3)
+        end })
+
+        ------------------------------------------------------------ Portal
+        local PORTAL_SETS = {
+            [1] = { Sky = V(-7894, 5547, -380), UnderWater = V(61163, 11, 1819) },
+            [2] = { SwanRoom = V(2285, 15, 905), ["Cursed Ship"] = V(923, 126, 32852) },
+            [3] = {
+                ["Castle On The Sea"] = V(-5097.93, 316.45, -3142.67), ["Mansion Cafe"] = V(-12471.17, 374.94, -7551.68),
+                ["Hydra Teleport"] = V(5643.45, 1013.09, -340.51), ["Canvendish Room"] = V(5314.55, 22.56, -127.07),
+                ["Temple of Time"] = V(28310.02, 14895.11, 109.46),
+            },
+        }
+        local portalNames = {}
+        for n in pairs(PORTAL_SETS[Sea] or {}) do portalNames[#portalNames + 1] = n end
+        table.sort(portalNames)
+        BF.PortalPick = portalNames[1]
+        local function usePortal()
+            local p = (PORTAL_SETS[Sea] or {})[BF.PortalPick or ""]
+            if p then call("requestEntrance", p) end
+        end
+        local sPortal = utilTab:AddSection("Portais")
+        sPortal:AddDropdown({ Name = "Select Portal", Options = portalNames, Default = portalNames[1], Flag = "PortalPick", Callback = function(v) BF.PortalPick = v end })
+        sPortal:AddButton({ Name = "Use Portal", Callback = usePortal })
+        sPortal:AddToggle({ Name = "Auto Use Portal", Default = false, Flag = "AutoPortal", Callback = function(v)
+            BF.AutoPortal = v
+            if v then loopFlag("autoportal", "AutoPortal", function() usePortal(); task.wait(5) end, 1) end
+        end })
+
+        ------------------------------------------------------------ Ilhas e NPCs (lista completa)
+        local ISL = {
+            [1] = {
+                { "WindMill", V(979.8, 16.52, 1429.05) }, { "Marine", V(-2566.43, 6.86, 2045.26) },
+                { "Middle Town", V(-690.33, 15.09, 1582.24) }, { "Jungle", V(-1612.8, 36.85, 149.13) },
+                { "Pirate Village", V(-1181.31, 4.75, 3803.55) }, { "Desert", V(944.16, 20.92, 4373.3) },
+                { "Snow Island", V(1347.81, 104.67, -1319.74) }, { "MarineFord", V(-4914.82, 50.96, 4281.03) },
+                { "Colosseum", V(-1427.62, 7.29, -2792.77) }, { "Sky Island 1", V(-4869.1, 733.46, -2667.02) },
+                { "Sky Island 2", V(-4607.82, 872.54, -1667.56), true }, { "Sky Island 3", V(-7894.62, 5547.14, -380.29), true },
+                { "Prison", V(4875.33, 5.65, 734.85) }, { "Magma Village", V(-5247.72, 12.88, 8504.97) },
+                { "Under Water Island", V(61163.85, 11.68, 1819.78), true }, { "Fountain City", V(5127.13, 59.5, 4105.45) },
+                { "Shank Room", V(-1442.17, 29.88, -28.35) }, { "Mob Island", V(-2850.2, 7.39, 5354.99) },
+            },
+            [2] = {
+                { "The Cafe", V(-380.48, 77.22, 255.83) }, { "First Spot", V(-11.31, 29.28, 2771.52) },
+                { "Dark Area", V(3780.03, 22.65, -3498.59) }, { "Flamingo Mansion", V(-483.73, 332.04, 595.33) },
+                { "Flamingo Room", V(2284.41, 15.15, 875.73) }, { "Green Zone", V(-2448.53, 73.02, -3210.63) },
+                { "Factory", V(424.13, 211.16, -427.54) }, { "Colosseum", V(-1503.62, 219.8, 1369.31) },
+                { "Zombie Island", V(-5622.03, 492.2, -781.79) }, { "Two Snow Mountain", V(753.14, 408.24, -5274.61) },
+                { "Punk Hazard", V(-6127.65, 15.95, -5040.29) }, { "Cursed Ship", V(923.4, 125.06, 32885.88) },
+                { "Ice Castle", V(6148.41, 294.39, -6741.12) }, { "Forgotten Island", V(-3032.76, 317.9, -10075.37) },
+                { "Ussop Island", V(4816.86, 8.46, 2863.82) }, { "Mini Sky Island", V(-288.74, 49326.32, -35248.59) },
+            },
+            [3] = {
+                { "Great Tree", V(2681.27, 1682.81, -7190.99) }, { "Castle On The Sea", V(-5074.46, 314.52, -2991.05) },
+                { "MiniSky", V(-260.66, 49325.8, -35253.57) }, { "Port Town", V(-95, 11, 5455) },
+                { "Hydra Island", V(5433, 1062, 290) }, { "Floating Turtle", V(-13274.53, 531.82, -7579.22) },
+                { "Mansion", V(-12551, 337, -7476) }, { "Haunted Castle", V(-9516, 142, 5537) },
+                { "Ice Cream Island", V(-874, 66, -10915) }, { "Peanut Island", V(-2062.75, 50.47, -10232.57) },
+                { "Cake Island", V(-1884.77, 19.33, -11666.9) }, { "Cocoa Island", V(87.94, 73.55, -12319.46) },
+                { "Candy Island", V(-1014.42, 149.11, -14555.96) }, { "Tiki Outpost", V(-16101.19, 12.84, 380.94) },
+            },
+        }
+        local NPCL = {
+            [1] = {
+                { "Ability Teacher", V(-1057.68, 9.65, 1799.49) }, { "Dark Step", V(-987.87, 13.78, 3989.5) },
+                { "Electro", V(-5389.5, 13.28, -2149.8) }, { "Fishman Karate", V(61581.8, 18.9, 987.83) },
+            },
+            [2] = {
+                { "Dragon Breath", V(703.37, 186.99, 654.52) }, { "Mysterious Man", V(-2574.43, 1627.92, -3739.36) },
+                { "Mysterious Scientist", V(-6437.88, 250.65, -4498.93) }, { "Awakening Expert", V(-408.1, 16.05, 247.43) },
+                { "Nerd", V(-401.78, 73.09, 262.31) }, { "Bar Manager", V(-385.85, 73.05, 316.09) },
+                { "Trevor", V(-341.5, 331.89, 643.02) }, { "Enhancement Editor", V(-346.82, 72.99, 1194.36) },
+                { "Pirate Recruiter", V(-428.07, 72.95, 1445.32) }, { "Marines Recruiter", V(-1349.77, 72.99, -1045.13) },
+                { "Chemist", V(-2777.45, 72.99, -3572.26) }, { "Cyborg", V(629.15, 312.31, -531.62) },
+                { "Ghoul Mark", V(635.17, 125.98, 33219.83) }, { "Guashiem", V(937.95, 181.08, 33277.93) },
+                { "El Admin", V(1322.81, 126.35, 33135.88) }, { "El Rodolfo", V(941.23, 40.47, 32778.99) },
+                { "Arowe", V(-1994.51, 125.52, -72.26) },
+            },
+            [3] = {
+                { "Blox Fruits Dealer", V(-12511, 337, -7448) }, { "Remove Devil Fruit", V(-5571, 1089, -2661) },
+                { "Horned Man", V(-11890, 931, -8760) }, { "Hungey Man", V(-10919, 624, -10268) },
+                { "Previous Hero", V(-10368, 332, -10128) }, { "Butler", V(-5125, 316, -3130) },
+                { "Lunoven", V(-5117, 316, -3093) }, { "Elite Hunter", V(-5420, 314, -2828) },
+                { "Player Hunter", V(-5559, 314, -2840) }, { "Uzoth", V(-9785, 852, 6667) },
+            },
+        }
+        local function toMap(list)
+            local names, map = {}, {}
+            for _, e in ipairs(list or {}) do
+                names[#names + 1] = e[1]
+                map[e[1]] = e
+            end
+            return names, map
+        end
+        local islNames, islMap = toMap(ISL[Sea])
+        local npcNames, npcMap = toMap(NPCL[Sea])
+        local islPick, npcPick = islNames[1], npcNames[1]
+        local function goEntry(e)
+            if not e then return end
+            spawnOnce("tpentry", function()
+                if e[3] then
+                    call("requestEntrance", e[2])
+                else
+                    BF.Teleporting = true
+                    Modes.travel(e[2])
+                    BF.Teleporting = false
+                end
+            end)
+        end
+        local sIsl = utilTab:AddSection("Teleporte - Lista Completa")
+        sIsl:AddDropdown({ Name = "Ilha", Options = islNames, Default = islNames[1], Flag = "IslPick", Callback = function(v) islPick = v end })
+        sIsl:AddButton({ Name = "Ir para a ilha", Callback = function() goEntry(islMap[islPick]) end })
+        if #npcNames > 0 then
+            sIsl:AddDropdown({ Name = "NPC", Options = npcNames, Default = npcNames[1], Flag = "NpcPick", Callback = function(v) npcPick = v end })
+            sIsl:AddButton({ Name = "Ir para o NPC", Callback = function() goEntry(npcMap[npcPick]) end })
+        end
+
+        ------------------------------------------------------------ Server extra
+        local sSv2 = utilTab:AddSection("Server - Extra")
+        sSv2:AddButton({ Name = "Copy JobId", Callback = function()
+            if setclipboard then setclipboard(tostring(game.JobId)); notify("Server", "JobId copiado", "success", 2) end
+        end })
+        sSv2:AddToggle({ Name = "Spam Join (Job Id acima)", Default = false, Flag = "SpamJoin", Callback = function(v)
+            BF.SpamJoin = v
+            if v then
+                loopFlag("spamjoin", "SpamJoin", function()
+                    if BF.JobInput and BF.JobInput ~= "" then
+                        pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, BF.JobInput, LP) end)
+                    end
+                end, 1)
+            end
+        end })
+
+        ------------------------------------------------------------ Shop
+        local shopTab = Window:AddTab("Shop", "🛒")
+        local sMisc = shopTab:AddSection("Misc Shop")
+        sMisc:AddButton({ Name = "Buy Dual Flintlock", Callback = function() call("BuyItem", "Flintlock") end })
+        sMisc:AddButton({ Name = "Reroll Race", Callback = function()
+            call("BlackbeardReward", "Reroll", "1"); call("BlackbeardReward", "Reroll", "2")
+        end })
+        sMisc:AddButton({ Name = "Reset Stats (Refund)", Callback = function()
+            call("BlackbeardReward", "Refund", "1"); call("BlackbeardReward", "Refund", "2")
+        end })
+        sMisc:AddButton({ Name = "Buy Race Cyborg", Callback = function() call("CyborgTrainer", "Buy") end })
+        sMisc:AddButton({ Name = "Buy Race Ghoul", Callback = function()
+            call("Ectoplasm", "BuyCheck", 4); task.wait(0.5); call("Ectoplasm", "Change", 4)
+        end })
+
+        local sAb = shopTab:AddSection("Abilities Shop")
+        sAb:AddButton({ Name = "Skyjump [$10,000 Beli]", Callback = function() call("BuyHaki", "Geppo") end })
+        sAb:AddButton({ Name = "Buso Haki [$25,000 Beli]", Callback = function() call("BuyHaki", "Buso") end })
+        sAb:AddButton({ Name = "Observation Haki [$750,000 Beli]", Callback = function() call("KenTalk", "Buy") end })
+        sAb:AddButton({ Name = "Soru [$100,000 Beli]", Callback = function() call("BuyHaki", "Soru") end })
+
+        local NPCS = {
+            BlackLeg = { [1] = V(-988, 13, 3996), [2] = V(-4750.61, 35.08, -4846.33), [3] = V(-5043.64, 371.35, -3183.4) },
+            Electro = { [1] = V(-5382.27, 14.15, -2150.34), [2] = V(-4863.81, 35.08, -4767.54), [3] = V(-4993.2, 314.56, -3198.06) },
+            FishmanKarate = { [1] = V(61584.35, 18.85, 988.89), [2] = V(-4960.04, 35.08, -4662.67), [3] = V(-5017.39, 371.35, -3187.53) },
+            Superhuman = { [2] = V(1378.05, 247.43, -5189.37), [3] = V(-4997.53, 371.35, -3197.46) },
+            DeathStep = { [2] = V(6360.04, 296.67, -6763.93), [3] = V(-4997.64, 314.56, -3220.37) },
+            SharkmanKarate = { [2] = V(-2602.4, 239.22, -10314.75), [3] = V(-4970.48, 314.56, -3225.04) },
+            ElectricClaw = { [3] = V(-10369.83, 331.69, -10126.49) },
+            DragonTalon = { [3] = V(5662.03, 1211.32, 858.6) },
+            GodHuman = { [3] = V(-13775.56, 334.66, -9877.67) },
+            SanguineArt = { [3] = V(-16514.86, 23.18, -190.84) },
+        }
+        local MELEE = {
+            { "Black Leg", "BlackLeg", "BuyBlackLeg" }, { "Fishman Karate", "FishmanKarate", "BuyFishmanKarate" },
+            { "Electro", "Electro", "BuyElectro" }, { "Superhuman", "Superhuman", "BuySuperhuman" },
+            { "Death Step", "DeathStep", "BuyDeathStep" }, { "Sharkman Karate", "SharkmanKarate", "BuySharkmanKarate" },
+            { "Electric Claw", "ElectricClaw", "BuyElectricClaw" }, { "Dragon Talon", "DragonTalon", "BuyDragonTalon" },
+            { "God Human", "GodHuman", "BuyGodhuman" }, { "Sanguine Art", "SanguineArt", "BuySanguineArt" },
+        }
+        local sMel = shopTab:AddSection("Fighting Shop (voa até o NPC e compra)")
+        for _, m in ipairs(MELEE) do
+            sMel:AddButton({ Name = m[1], Callback = function()
+                local pos = NPCS[m[2]] and NPCS[m[2]][Sea]
+                if not pos then notify("Fighting Shop", m[1] .. " indisponível neste mar", "warn", 3); return end
+                spawnOnce("melee", function()
+                    BF.Teleporting = true
+                    Modes.travel(pos)
+                    BF.Teleporting = false
+                    call(m[3])
+                    notify("Fighting Shop", "Pedido enviado: " .. m[1], "success", 3)
+                end)
+            end })
+        end
+
+        ------------------------------------------------------------ Status de eventos
+        local MOON = {
+            ["http://www.roblox.com/asset/?id=9709149431"] = "5/5", ["http://www.roblox.com/asset/?id=9709149052"] = "4/5",
+            ["http://www.roblox.com/asset/?id=9709143733"] = "3/5", ["http://www.roblox.com/asset/?id=9709150401"] = "2/5",
+            ["http://www.roblox.com/asset/?id=9709149680"] = "1/5",
+        }
+        local function yn(b) return b and "✅" or "❌" end
+        task.spawn(function()
+            while alive do
+                pcall(function()
+                    local ws = workspace
+                    local loc = ws:FindFirstChild("_WorldOrigin") and ws._WorldOrigin:FindFirstChild("Locations")
+                    local en = ws:FindFirstChild("Enemies")
+                    local function has(n) return (en and en:FindFirstChild(n)) or RS:FindFirstChild(n) end
+                    setLabel(infoLbls.mirage, "Mirage Island: " .. yn(loc and loc:FindFirstChild("Mirage Island")))
+                    setLabel(infoLbls.kitsune, "Kitsune Island: " .. yn(ws:FindFirstChild("Map") and ws.Map:FindFirstChild("KitsuneIsland")))
+                    setLabel(infoLbls.prehist, "Prehistoric Island: " .. yn(loc and loc:FindFirstChild("Prehistoric Island")))
+                    setLabel(infoLbls.frozen, "Frozen Dimension: " .. yn(loc and loc:FindFirstChild("Frozen Dimension")))
+                    setLabel(infoLbls.tyrant, "Tyrant of the Skies: " .. yn(has("Tyrant of the Skies")))
+                    setLabel(infoLbls.rip, "Rip Indra: " .. yn(RS:FindFirstChild("rip_indra True Form") or (en and en:FindFirstChild("rip_indra"))))
+                    setLabel(infoLbls.dough, "Dough King: " .. yn(has("Dough King")))
+                    local _, prog = Modes.info()
+                    setLabel(infoLbls.elite2, "Elite Hunter: " .. yn(has("Diablo") or has("Deandre") or has("Urban")) .. " | Killed: " .. tostring(prog))
+                    local sky = game:GetService("Lighting"):FindFirstChild("Sky")
+                    setLabel(infoLbls.moon, "Lua: " .. (sky and MOON[sky.MoonTextureId] or "0/5"))
+                    local cf = getCommF()
+                    if cf then
+                        local okB, bones = pcall(function() return cf:InvokeServer("Bones", "Check") end)
+                        if okB then setLabel(infoLbls.bones, "Bones: " .. tostring(bones)) end
+                        local okL, lever = pcall(function() return cf:InvokeServer("CheckTempleDoor") end)
+                        if okL then setLabel(infoLbls.lever, "Pull Lever: " .. yn(lever)) end
+                    end
+                end)
+                task.wait(3)
+            end
+        end)
+    end
+
     local VU = game:GetService("VirtualUser")
     local afkConn = LP.Idled:Connect(function()
         if not BF.AntiAFK then return end
@@ -1857,6 +2933,10 @@ return function(ctx)
         fpsBoost(false)
         BF.Modes = {}
         BF.AutoTravel, BF.AutoBuyChip, BF.CheapFruit = false, false, false
+        for _, k in ipairs({ "AutoFishing", "AutoKen", "AutoV4", "AutoPortal", "RandomFruit", "ChestBypass", "Noclip", "SpamJoin" }) do
+            BF[k] = false
+        end
+        for _, c in ipairs(BF._conns or {}) do pcall(function() c:Disconnect() end) end
         pcall(function() afkConn:Disconnect() end)
     end
 end
