@@ -1,6 +1,6 @@
 --!nocheck
 --================================================--
--- PREMIUM HUB v10.9 - MM2 MODULE (AUTO GUN & SCANNER)
+-- PREMIUM HUB v12.0 - MM2 ULTIMATE MODULE
 --================================================--
 return function(ctx)
     local Library=ctx.Library; local CFG=ctx.CFG; local Window=ctx.Window
@@ -10,94 +10,210 @@ return function(ctx)
     if not IS_MM2 then return end
 
     --================================================--
-    -- UI
+    -- SERVIÇOS E REFERÊNCIAS
+    --================================================--
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local Lighting = game:GetService("Lighting")
+    local Workspace = game:GetService("Workspace")
+    local UserInputService = game:GetService("UserInputService")
+    local TweenService = game:GetService("TweenService")
+    local Camera = Workspace.CurrentCamera
+    local Mouse = LP:GetMouse()
+
+    --================================================--
+    -- VARIÁVEIS DE ESTADO
+    --================================================--
+    local espHighlights = {}
+    local coinHighlights = {}
+    local gunHighlight = nil
+    local flyConnection = nil
+    local flyBV = nil
+    local flyBG = nil
+    local stats = { coinsCollected = 0, startTime = tick() }
+
+    --================================================--
+    -- UI - ABAS E SEÇÕES
     --================================================--
     local mm2Tab = Window:AddTab("Murder Mystery 2", "🔪")
-    local sMM2St = mm2Tab:AddSection("Status")
-    local mm2St = sMM2St:AddLabel("Verificando...")
-    task.spawn(function() task.wait(2); mm2St:Set("[OK] MM2 detectado") end)
+    
+    -- Status
+    local sStatus = mm2Tab:AddSection("Status do Jogador")
+    local roleLabel = sStatus:AddLabel("Cargo: Desconhecido")
+    local statsLabel = sStatus:AddLabel("Moedas Coletadas: 0")
 
-    local sMM2E = mm2Tab:AddSection("ESP")
-    sMM2E:AddToggle({ Name="ESP Murderer", Default=false, Flag="MM2_ESP_Murderer", Callback=function(v) CFG.MM2_ESP_Murderer=v end })
-    sMM2E:AddToggle({ Name="ESP Sheriff", Default=false, Flag="MM2_ESP_Sheriff", Callback=function(v) CFG.MM2_ESP_Sheriff=v end })
-    sMM2E:AddToggle({ Name="ESP Innocent", Default=false, Flag="MM2_ESP_Innocent", Callback=function(v) CFG.MM2_ESP_Innocent=v end })
-
-    -- SEÇÃO: AUTO COLETAR (MOEDAS E ARMAS)
-    local sMM2C = mm2Tab:AddSection("Auto Coletar")
-    sMM2C:AddToggle({
-        Name = "Coletar Moedas Instantâneo",
-        Default = false,
-        Flag = "MM2_AutoCoins",
-        Callback = function(v) CFG.MM2_AutoCoins = v end
-    })
-    sMM2C:AddToggle({
-        Name = "Auto Pegar Arma (GunDrop)",
-        Default = false,
-        Flag = "MM2_AutoGun",
-        Callback = function(v) CFG.MM2_AutoGun = v end
-    })
-    sMM2C:AddButton({
-        Name = "Escanear Armas no Mapa (Log)",
-        Callback = function()
-            local names = {}
-            for _, obj in ipairs(workspace:GetDescendants()) do
-                local n = string.lower(obj.Name)
-                if n:find("gun") or n:find("revolver") or n:find("pistol") or n == "gundrop" then
-                    table.insert(names, obj.Name)
-                end
-            end
-            print("--- ARMAS ENCONTRADAS ---")
-            for _, name in ipairs(names) do
-                print(name)
-            end
-            print("Total: " .. #names)
+    -- Visual
+    local sVisual = mm2Tab:AddSection("Visual (ESP)")
+    sVisual:AddToggle({ Name="ESP Murderer (Vermelho)", Default=false, Flag="MM2_ESP_Murderer", Callback=function(v) CFG.MM2_ESP_Murderer=v end })
+    sVisual:AddToggle({ Name="ESP Sheriff (Azul)", Default=false, Flag="MM2_ESP_Sheriff", Callback=function(v) CFG.MM2_ESP_Sheriff=v end })
+    sVisual:AddToggle({ Name="ESP Innocent (Verde)", Default=false, Flag="MM2_ESP_Innocent", Callback=function(v) CFG.MM2_ESP_Innocent=v end })
+    sVisual:AddToggle({ Name="ESP Moedas", Default=false, Flag="MM2_ESP_Coins", Callback=function(v) CFG.MM2_ESP_Coins=v end })
+    sVisual:AddToggle({ Name="ESP Arma Caída", Default=false, Flag="MM2_ESP_Gun", Callback=function(v) CFG.MM2_ESP_Gun=v end })
+    sVisual:AddToggle({ Name="Fullbright (Claridade Máxima)", Default=false, Flag="MM2_Fullbright", Callback=function(v) 
+        CFG.MM2_Fullbright = v
+        if v then
+            Lighting.Brightness = 2
+            Lighting.ClockTime = 12
+            Lighting.FogEnd = 100000
+            Lighting.GlobalShadows = false
+        else
+            Lighting.Brightness = 1
+            Lighting.GlobalShadows = true
         end
-    })
+    end })
 
-    local sMM2M = mm2Tab:AddSection("Speed e Jump")
-    sMM2M:AddSlider({ Name="Velocidade", Min=16, Max=100, Default=16, Step=1, Flag="MM2_Speed", Callback=function(v) CFG.MM2_Speed=v end })
-    sMM2M:AddSlider({ Name="Pulo", Min=50, Max=200, Default=50, Step=5, Flag="MM2_Jump", Callback=function(v) CFG.MM2_Jump=v end })
+    -- Farm e Coleta
+    local sFarm = mm2Tab:AddSection("Auto Coletar")
+    sFarm:AddToggle({ Name="Coletar Moedas Instantâneo", Default=false, Flag="MM2_AutoCoins", Callback=function(v) CFG.MM2_AutoCoins=v end })
+    sFarm:AddToggle({ Name="Auto Pegar Arma (GunDrop)", Default=false, Flag="MM2_AutoGun", Callback=function(v) CFG.MM2_AutoGun=v end })
+    sFarm:AddSlider({ Name="Velocidade de Tween (Farm)", Min=50, Max=500, Default=200, Step=10, Flag="MM2_TweenSpeed", Callback=function(v) CFG.MM2_TweenSpeed=v end })
+    sFarm:AddButton({ Name="Resetar Contador de Moedas", Callback=function() stats.coinsCollected = 0 end })
+
+    -- Movimento
+    local sMove = mm2Tab:AddSection("Movimento")
+    sMove:AddSlider({ Name="Velocidade", Min=16, Max=200, Default=16, Step=1, Flag="MM2_Speed", Callback=function(v) CFG.MM2_Speed=v end })
+    sMove:AddSlider({ Name="Pulo", Min=50, Max=300, Default=50, Step=5, Flag="MM2_Jump", Callback=function(v) CFG.MM2_Jump=v end })
+    sMove:AddToggle({ Name="Noclip (Atravessar Paredes)", Default=false, Flag="MM2_Noclip", Callback=function(v) CFG.MM2_Noclip=v end })
+    sMove:AddToggle({ Name="Salto Infinito", Default=false, Flag="MM2_InfJump", Callback=function(v) CFG.MM2_InfJump=v end })
+    sMove:AddToggle({ Name="Fly (Voar)", Default=false, Flag="MM2_Fly", Callback=function(v) 
+        CFG.MM2_Fly = v
+        local char = LP.Character
+        if not char then return end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        if v then
+            flyBV = Instance.new("BodyVelocity")
+            flyBV.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+            flyBV.Velocity = Vector3.zero
+            flyBV.Parent = root
+            flyBG = Instance.new("BodyGyro")
+            flyBG.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+            flyBG.Parent = root
+            char.Humanoid.PlatformStand = true
+            flyConnection = RunService.RenderStepped:Connect(function()
+                if not CFG.MM2_Fly or not root.Parent then return end
+                local dir = Vector3.zero
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + Camera.CFrame.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - Camera.CFrame.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - Camera.CFrame.RightVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + Camera.CFrame.RightVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0, 1, 0) end
+                if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir = dir - Vector3.new(0, 1, 0) end
+                flyBV.Velocity = dir * 50
+            end)
+        else
+            if flyConnection then flyConnection:Disconnect() flyConnection = nil end
+            if flyBV then flyBV:Destroy() flyBV = nil end
+            if flyBG then flyBG:Destroy() flyBG = nil end
+            if char.Humanoid then char.Humanoid.PlatformStand = false end
+        end
+    end })
+
+    -- Combate
+    local sCombat = mm2Tab:AddSection("Combate")
+    sCombat:AddToggle({ Name="Auto-Shoot (Sheriff)", Default=false, Flag="MM2_AutoShoot", Callback=function(v) CFG.MM2_AutoShoot=v end })
+    sCombat:AddToggle({ Name="Kill Aura (Murderer)", Default=false, Flag="MM2_KillAura", Callback=function(v) CFG.MM2_KillAura=v end })
+    sCombat:AddSlider({ Name="Alcance Kill Aura", Min=5, Max=30, Default=15, Step=1, Flag="MM2_AuraRange", Callback=function(v) CFG.MM2_AuraRange=v end })
+    sCombat:AddToggle({ Name="Auto-Stab (Esfaquear)", Default=false, Flag="MM2_AutoStab", Callback=function(v) CFG.MM2_AutoStab=v end })
+    sCombat:AddToggle({ Name="Silent Aim (Mira Silenciosa)", Default=false, Flag="MM2_SilentAim", Callback=function(v) CFG.MM2_SilentAim=v end })
+    sCombat:AddToggle({ Name="Aimbot (Travar Mira)", Default=false, Flag="MM2_Aimbot", Callback=function(v) CFG.MM2_Aimbot=v end })
+    sCombat:AddToggle({ Name="Kill All (Matar Todos)", Default=false, Flag="MM2_KillAll", Callback=function(v) 
+        CFG.MM2_KillAll = v
+        if v then
+            task.spawn(function()
+                while CFG.MM2_KillAll do
+                    local char = LP.Character
+                    local knife = char and (char:FindFirstChild("Knife") or (LP:FindFirstChild("Backpack") and LP.Backpack:FindFirstChild("Knife")))
+                    if knife then
+                        for _, p in ipairs(Players:GetPlayers()) do
+                            if p ~= LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                                pcall(function() knife:Activate() end)
+                            end
+                        end
+                    end
+                    task.wait(0.1)
+                end
+            end)
+        end
+    end })
+
+    -- Teleportes
+    local sTP = mm2Tab:AddSection("Teleportes")
+    sTP:AddButton({ Name="Teleportar para Murderer", Callback=function()
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LP and getPlayerRole(p) == "Murderer" and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                LP.Character.HumanoidRootPart.CFrame = p.Character.HumanoidRootPart.CFrame
+                break
+            end
+        end
+    end })
+    sTP:AddButton({ Name="Teleportar para Sheriff", Callback=function()
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LP and getPlayerRole(p) == "Sheriff" and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                LP.Character.HumanoidRootPart.CFrame = p.Character.HumanoidRootPart.CFrame
+                break
+            end
+        end
+    end })
+    sTP:AddButton({ Name="Teleportar para Moeda Mais Próxima", Callback=function()
+        local container = getCoinContainer()
+        if not container then return end
+        local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local closest, dist = nil, math.huge
+        for _, coin in ipairs(container:GetChildren()) do
+            if coin:IsA("BasePart") then
+                local d = (hrp.Position - coin.Position).Magnitude
+                if d < dist then dist = d; closest = coin end
+            end
+        end
+        if closest then hrp.CFrame = closest.CFrame end
+    end })
+    sTP:AddButton({ Name="Teleportar para Arma Caída", Callback=function()
+        local gun = getDroppedGun()
+        if gun and LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then
+            LP.Character.HumanoidRootPart.CFrame = gun.CFrame
+        end
+    end })
+
+    -- Utilidades
+    local sUtil = mm2Tab:AddSection("Utilidades")
+    sUtil:AddToggle({ Name="Anti-AFK", Default=false, Flag="MM2_AntiAFK", Callback=function(v) CFG.MM2_AntiAFK=v end })
+    sUtil:AddToggle({ Name="Godmode (Experimental)", Default=false, Flag="MM2_Godmode", Callback=function(v) 
+        CFG.MM2_Godmode = v
+        local char = LP.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then hum.MaxHealth = v and math.huge or 100; hum.Health = hum.MaxHealth end
+        end
+    end })
+    sUtil:AddButton({ Name="Resetar Personagem", Callback=function() LP.Character:BreakJoints() end })
+    sUtil:AddButton({ Name="Espectar Jogador Aleatório", Callback=function()
+        local players = Players:GetPlayers()
+        local target = players[math.random(1, #players)]
+        if target and target ~= LP and target.Character then
+            Camera.CameraSubject = target.Character:FindFirstChildOfClass("Humanoid") or target.Character
+        end
+    end })
 
     --================================================--
     -- FUNÇÕES AUXILIARES
     --================================================--
 
-    -- Encontra o CoinContainer do mapa ativo
     local function getCoinContainer()
-        for _, obj in ipairs(workspace:GetChildren()) do
+        for _, obj in ipairs(Workspace:GetChildren()) do
             if obj:IsA("Model") or obj:IsA("Folder") then
                 local container = obj:FindFirstChild("CoinContainer")
-                if container then
-                    return container
-                end
+                if container then return container end
             end
         end
         return nil
     end
 
-    -- Coleta todas as moedas usando firetouchinterest
-    local function collectAllCoins(hrp)
-        local container = getCoinContainer()
-        if not container then return end
-        for _, coin in ipairs(container:GetChildren()) do
-            if coin:IsA("BasePart") then
-                pcall(function()
-                    firetouchinterest(hrp, coin, 0)
-                    firetouchinterest(hrp, coin, 1)
-                end)
-            end
-        end
-    end
-
-    -- Encontra a arma caída (GunDrop ou similar)
     local function getDroppedGun()
-        -- Procura direta pelo GunDrop (comum no MM2)
-        local gun = workspace:FindFirstChild("GunDrop")
-        if gun and gun:IsA("BasePart") then
-            return gun
-        end
-        -- Fallback: procura por qualquer parte com nome relacionado
-        for _, obj in ipairs(workspace:GetDescendants()) do
+        local gun = Workspace:FindFirstChild("GunDrop")
+        if gun and gun:IsA("BasePart") then return gun end
+        for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj:IsA("BasePart") then
                 local n = string.lower(obj.Name)
                 if n:find("gun") or n:find("revolver") or n:find("pistol") then
@@ -108,24 +224,220 @@ return function(ctx)
         return nil
     end
 
-    -- Coleta a arma (teleporte ou touch)
+    local function getPlayerRole(player)
+        local char = player.Character
+        if not char then return "Desconhecido" end
+        local backpack = player:FindFirstChild("Backpack")
+        local function checkTools(container)
+            if not container then return nil end
+            for _, tool in ipairs(container:GetChildren()) do
+                if tool:IsA("Tool") then
+                    local n = string.lower(tool.Name)
+                    if n:find("knife") then return "Murderer" end
+                    if n:find("gun") or n:find("revolver") then return "Sheriff" end
+                end
+            end
+            return nil
+        end
+        return checkTools(char) or checkTools(backpack) or "Innocent"
+    end
+
+    local function getMyRole() return getPlayerRole(LP) end
+
+    local function collectAllCoins(hrp)
+        local container = getCoinContainer()
+        if not container then return end
+        for _, coin in ipairs(container:GetChildren()) do
+            if coin:IsA("BasePart") then
+                pcall(function()
+                    firetouchinterest(hrp, coin, 0)
+                    firetouchinterest(hrp, coin, 1)
+                end)
+                stats.coinsCollected = stats.coinsCollected + 1
+            end
+        end
+    end
+
     local function grabGun(hrp)
         local gun = getDroppedGun()
+        if gun then
+            pcall(function()
+                firetouchinterest(hrp, gun, 0)
+                firetouchinterest(hrp, gun, 1)
+            end)
+        end
+    end
+
+    local function doKillAura(hrp, char)
+        local knife = char:FindFirstChild("Knife") or (LP:FindFirstChild("Backpack") and LP.Backpack:FindFirstChild("Knife"))
+        if not knife then return end
+        local range = CFG.MM2_AuraRange or 15
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                local dist = (hrp.Position - p.Character.HumanoidRootPart.Position).Magnitude
+                if dist < range then
+                    pcall(function() knife:Activate() end)
+                    break
+                end
+            end
+        end
+    end
+
+    local function doAutoShoot(char)
+        local gun = char:FindFirstChild("Gun") or char:FindFirstChild("Revolver") or (LP:FindFirstChild("Backpack") and (LP.Backpack:FindFirstChild("Gun") or LP.Backpack:FindFirstChild("Revolver")))
         if not gun then return end
-        -- Opção 1: Teleporte (mais garantido)
-        -- hrp.CFrame = gun.CFrame
-        -- Opção 2: Firetouchinterest (mais discreto)
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LP and getPlayerRole(p) == "Murderer" and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(p.Character.HumanoidRootPart.Position)
+                if onScreen then
+                    pcall(function() gun:Activate() end)
+                end
+            end
+        end
+    end
+
+    local function doAutoStab(char)
+        local knife = char:FindFirstChild("Knife") or (LP:FindFirstChild("Backpack") and LP.Backpack:FindFirstChild("Knife"))
+        if not knife then return end
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                local dist = (char.HumanoidRootPart.Position - p.Character.HumanoidRootPart.Position).Magnitude
+                if dist < 10 then
+                    pcall(function() knife:Activate() end)
+                end
+            end
+        end
+    end
+
+    local function doSilentAim()
+        if not CFG.MM2_SilentAim then return end
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LP and getPlayerRole(p) == "Murderer" and p.Character and p.Character:FindFirstChild("Head") then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(p.Character.Head.Position)
+                if onScreen then
+                    pcall(function()
+                        if mousemoverel then
+                            local delta = Vector2.new(screenPos.X - Mouse.X, screenPos.Y - Mouse.Y)
+                            mousemoverel(delta.X, delta.Y)
+                        end
+                    end)
+                    break
+                end
+            end
+        end
+    end
+
+    local function doAimbot()
+        if not CFG.MM2_Aimbot then return end
+        local target = nil
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LP and getPlayerRole(p) == "Murderer" and p.Character and p.Character:FindFirstChild("Head") then
+                target = p.Character.Head
+                break
+            end
+        end
+        if target then
+            local screenPos, onScreen = Camera:WorldToViewportPoint(target.Position)
+            if onScreen then
+                pcall(function()
+                    if mousemoverel then
+                        local delta = Vector2.new(screenPos.X - Mouse.X, screenPos.Y - Mouse.Y)
+                        mousemoverel(delta.X, delta.Y)
+                    end
+                end)
+            end
+        end
+    end
+
+    local function doAntiAFK()
+        if not CFG.MM2_AntiAFK then return end
         pcall(function()
-            firetouchinterest(hrp, gun, 0)
-            firetouchinterest(hrp, gun, 1)
+            local vu = game:GetService("VirtualUser")
+            LP.Idled:Connect(function()
+                vu:CaptureController()
+                vu:ClickButton2(Vector2.new())
+            end)
         end)
     end
 
+    local function updateESP()
+        -- Jogadores
+        for p, h in pairs(espHighlights) do
+            if not p.Character or not p.Character:FindFirstChild("HumanoidRootPart") then
+                h:Destroy(); espHighlights[p] = nil
+            end
+        end
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                local role = getPlayerRole(p)
+                local shouldDraw = false
+                local color = Color3.new(1,1,1)
+                if role == "Murderer" and CFG.MM2_ESP_Murderer then shouldDraw = true; color = Color3.fromRGB(255,0,0)
+                elseif role == "Sheriff" and CFG.MM2_ESP_Sheriff then shouldDraw = true; color = Color3.fromRGB(0,150,255)
+                elseif role == "Innocent" and CFG.MM2_ESP_Innocent then shouldDraw = true; color = Color3.fromRGB(0,255,0) end
+                if shouldDraw then
+                    if not espHighlights[p] then
+                        local h = Instance.new("Highlight")
+                        h.Name = "MM2_ESP"; h.Adornee = p.Character; h.Parent = p.Character
+                        espHighlights[p] = h
+                    end
+                    espHighlights[p].FillColor = color
+                    espHighlights[p].OutlineColor = Color3.new(0,0,0)
+                    espHighlights[p].FillTransparency = 0.5
+                else
+                    if espHighlights[p] then espHighlights[p]:Destroy(); espHighlights[p] = nil end
+                end
+            end
+        end
+
+        -- Moedas
+        if CFG.MM2_ESP_Coins then
+            local container = getCoinContainer()
+            if container then
+                for _, coin in ipairs(container:GetChildren()) do
+                    if coin:IsA("BasePart") and not coinHighlights[coin] then
+                        local h = Instance.new("Highlight")
+                        h.Name = "Coin_ESP"; h.Adornee = coin; h.Parent = coin
+                        h.FillColor = Color3.fromRGB(255,255,0); h.OutlineColor = Color3.new(1,1,1)
+                        coinHighlights[coin] = h
+                    end
+                end
+            end
+        else
+            for coin, h in pairs(coinHighlights) do h:Destroy(); coinHighlights[coin] = nil end
+        end
+
+        -- Arma
+        if CFG.MM2_ESP_Gun then
+            local gun = getDroppedGun()
+            if gun and not gunHighlight then
+                gunHighlight = Instance.new("Highlight")
+                gunHighlight.Name = "Gun_ESP"; gunHighlight.Adornee = gun; gunHighlight.Parent = gun
+                gunHighlight.FillColor = Color3.fromRGB(255,0,255); gunHighlight.OutlineColor = Color3.new(1,1,1)
+            elseif not gun and gunHighlight then
+                gunHighlight:Destroy(); gunHighlight = nil
+            end
+        else
+            if gunHighlight then gunHighlight:Destroy(); gunHighlight = nil end
+        end
+    end
+
     --================================================--
-    -- LOOP PRINCIPAL
+    -- LOOPS
     --================================================--
+
+    -- Loop de Visual e Status
     task.spawn(function()
-        while task.wait(0.2) do
+        while task.wait(0.5) do
+            roleLabel:Set("Cargo: " .. getMyRole())
+            statsLabel:Set("Moedas Coletadas: " .. stats.coinsCollected)
+            updateESP()
+        end
+    end)
+
+    -- Loop Principal (Movimento, Coleta, Combate)
+    task.spawn(function()
+        while task.wait(0.1) do
             local char, hrp = GetChar(LP)
             if char and hrp then
                 local hum = char:FindFirstChildOfClass("Humanoid")
@@ -134,13 +446,31 @@ return function(ctx)
                     if CFG.MM2_Jump ~= 50 then hum.JumpPower = CFG.MM2_Jump end
                 end
 
-                if CFG.MM2_AutoCoins then
-                    collectAllCoins(hrp)
+                if CFG.MM2_Noclip then
+                    for _, part in ipairs(char:GetDescendants()) do
+                        if part:IsA("BasePart") and part.CanCollide then part.CanCollide = false end
+                    end
                 end
 
-                if CFG.MM2_AutoGun then
-                    grabGun(hrp)
+                if CFG.MM2_InfJump then
+                    hum:ChangeState(Enum.HumanoidStateType.Jumping)
                 end
+
+                if CFG.MM2_AutoCoins then collectAllCoins(hrp) end
+                if CFG.MM2_AutoGun then grabGun(hrp) end
+
+                if CFG.MM2_KillAura then doKillAura(hrp, char) end
+                if CFG.MM2_AutoShoot then doAutoShoot(char) end
+                if CFG.MM2_AutoStab then doAutoStab(char) end
+                if CFG.MM2_SilentAim then doSilentAim() end
+                if CFG.MM2_Aimbot then doAimbot() end
+
+                if CFG.MM2_Godmode then
+                    hum.MaxHealth = math.huge
+                    hum.Health = math.huge
+                end
+
+                doAntiAFK()
             end
         end
     end)
